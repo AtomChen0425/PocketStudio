@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TinyOffice Python</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">T</div>
+          <div>
+            <h1>TinyOffice</h1>
+            <p>Python control plane</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active" data-view="office" title="Office">⌂<span>Office</span></button>
+          <button class="nav-item" data-view="agents" title="Agents">◫<span>Agents</span></button>
+          <button class="nav-item" data-view="teams" title="Teams">◇<span>Teams</span></button>
+          <button class="nav-item" data-view="queue" title="Queue">↻<span>Queue</span></button>
+          <button class="nav-item" data-view="tasks" title="Tasks">☑<span>Tasks</span></button>
+          <button class="nav-item" data-view="events" title="Events">≋<span>Events</span></button>
+        </nav>
+        <div class="status-panel">
+          <span class="status-dot"></span>
+          <div>
+            <strong id="healthText">Connecting</strong>
+            <small id="providerText">providers</small>
+          </div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Live workspace</p>
+            <h2 id="viewTitle">Office</h2>
+          </div>
+          <div class="toolbar">
+            <button id="seedDemo" class="ghost-button">Seed demo</button>
+            <button id="refreshAll" class="primary-button">Refresh</button>
+          </div>
+        </header>
+
+        <section id="office" class="view active">
+          <div class="office-layout">
+            <section class="office-scene" aria-label="Pixel office scene">
+              <div class="back-wall">
+                <div class="whiteboard">Queue</div>
+                <div class="shelf"><span></span><span></span><span></span></div>
+                <div class="clock"></div>
+              </div>
+              <div id="sceneAgents" class="scene-agents"></div>
+              <div class="desk desk-a"><div class="monitor"></div><div class="keyboard"></div></div>
+              <div class="desk desk-b"><div class="monitor"></div><div class="keyboard"></div></div>
+              <div class="desk desk-c"><div class="monitor"></div><div class="keyboard"></div></div>
+              <div class="plant plant-a"></div>
+              <div class="sofa"></div>
+            </section>
+
+            <section class="conversation-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Conversation</p>
+                  <h3 id="activeTeamName">Team chat</h3>
+                </div>
+                <select id="teamSelect"></select>
+              </div>
+              <div id="chatLog" class="chat-log"></div>
+              <form id="promptForm" class="prompt-form">
+                <textarea id="promptInput" rows="3" placeholder="Message a team or agent"></textarea>
+                <div class="prompt-actions">
+                  <select id="targetSelect"></select>
+                  <button type="submit" class="primary-button">Send</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="agents" class="view">
+          <div class="two-column">
+            <form id="agentForm" class="form-panel">
+              <h3>Create agent</h3>
+              <label>ID<input name="id" required placeholder="coder" /></label>
+              <label>Name<input name="name" required placeholder="Coder" /></label>
+              <label>Role<input name="role" required placeholder="Python engineer" /></label>
+              <label>Provider<select name="provider" id="agentProvider"></select></label>
+              <label>System prompt<textarea name="system_prompt" rows="4"></textarea></label>
+              <button class="primary-button" type="submit">Save agent</button>
+            </form>
+            <div id="agentGrid" class="card-grid"></div>
+          </div>
+        </section>
+
+        <section id="teams" class="view">
+          <div class="two-column">
+            <form id="teamForm" class="form-panel">
+              <h3>Create team</h3>
+              <label>ID<input name="id" required placeholder="dev" /></label>
+              <label>Name<input name="name" required placeholder="Dev Team" /></label>
+              <label>Mode<select name="mode"><option value="chain">Chain</option><option value="fanout">Fan-out</option></select></label>
+              <label>Agents<select name="agent_ids" id="teamAgents" multiple></select></label>
+              <button class="primary-button" type="submit">Save team</button>
+            </form>
+            <div id="teamGrid" class="card-grid"></div>
+          </div>
+        </section>
+
+        <section id="queue" class="view">
+          <div class="table-panel">
+            <div class="panel-header">
+              <h3>Message queue</h3>
+              <button id="processNext" class="primary-button">Process next</button>
+            </div>
+            <div id="queueList" class="stack-list"></div>
+          </div>
+        </section>
+
+        <section id="tasks" class="view">
+          <div class="two-column">
+            <form id="taskForm" class="form-panel">
+              <h3>Create task</h3>
+              <label>Title<input name="title" required placeholder="Ship office UI" /></label>
+              <label>Description<textarea name="description" rows="4"></textarea></label>
+              <label>Status<select name="status"><option>todo</option><option>in_progress</option><option>done</option></select></label>
+              <button class="primary-button" type="submit">Create task</button>
+            </form>
+            <div class="task-board">
+              <div><h3>Todo</h3><div id="todoTasks" class="task-column"></div></div>
+              <div><h3>In progress</h3><div id="inProgressTasks" class="task-column"></div></div>
+              <div><h3>Done</h3><div id="doneTasks" class="task-column"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="events" class="view">
+          <div class="table-panel">
+            <h3>Event stream</h3>
+            <div id="eventList" class="stack-list event-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>

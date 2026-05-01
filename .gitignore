@@ -1,0 +1,5 @@
+/.vscode
+/.pytest-tmp
+/.pytest_cache
+/.upstream-tinyagi
+__pycache__/
