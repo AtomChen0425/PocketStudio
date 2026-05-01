@@ -9,7 +9,7 @@ def test_office_frontend_served() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "TinyOffice" in response.text
+    assert "pocketStudio" in response.text
     assert "/static/app.js" in response.text
 
 

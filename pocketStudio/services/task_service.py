@@ -12,8 +12,19 @@ class TaskService:
 
     def create(self, payload: TaskCreate) -> Task:
         cursor = self.db.execute(
-            "INSERT INTO tasks (title, description, status, assignee) VALUES (?, ?, ?, ?)",
-            (payload.title, payload.description, payload.status, payload.assignee),
+            """
+            INSERT INTO tasks (title, description, status, assignee, assignee_type, project_id, position)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload.title,
+                payload.description,
+                payload.status,
+                payload.assignee,
+                payload.assignee_type,
+                payload.project_id,
+                payload.position,
+            ),
         )
         task = self.get(cursor.lastrowid)
         self.events.emit("task.created", {"task_id": task.id, "title": task.title})
@@ -33,10 +44,20 @@ class TaskService:
         self.db.execute(
             """
             UPDATE tasks
-            SET title = ?, description = ?, status = ?, assignee = ?, updated_at = CURRENT_TIMESTAMP
+            SET title = ?, description = ?, status = ?, assignee = ?,
+                assignee_type = ?, project_id = ?, position = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (payload.title, payload.description, payload.status, payload.assignee, task_id),
+            (
+                payload.title,
+                payload.description,
+                payload.status,
+                payload.assignee,
+                payload.assignee_type,
+                payload.project_id,
+                payload.position,
+                task_id,
+            ),
         )
         task = self.get(task_id)
         self.events.emit("task.updated", {"task_id": task.id, "status": task.status})
@@ -63,6 +84,9 @@ class TaskService:
             description=row["description"],
             status=row["status"],
             assignee=row["assignee"],
+            assignee_type=row["assignee_type"],
+            project_id=row["project_id"],
+            position=row["position"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

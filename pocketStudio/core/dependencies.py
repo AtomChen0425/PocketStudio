@@ -6,10 +6,14 @@ from pocketStudio.providers.registry import ProviderRegistry
 from pocketStudio.services.agent_service import AgentService
 from pocketStudio.services.chat_service import ChatService
 from pocketStudio.services.event_service import EventService
+from pocketStudio.services.heartbeat_service import HeartbeatService
 from pocketStudio.services.orchestrator import Orchestrator
+from pocketStudio.services.project_service import ProjectService
 from pocketStudio.services.queue_service import QueueService
+from pocketStudio.services.schedule_service import ScheduleService
 from pocketStudio.services.task_service import TaskService
 from pocketStudio.services.team_service import TeamService
+from pocketStudio.services.worker_service import WorkerService
 
 
 @lru_cache
@@ -51,8 +55,23 @@ def get_task_service() -> TaskService:
 
 
 @lru_cache
+def get_project_service() -> ProjectService:
+    return ProjectService(get_database(), get_event_service())
+
+
+@lru_cache
+def get_schedule_service() -> ScheduleService:
+    return ScheduleService(get_database(), get_event_service())
+
+
+@lru_cache
+def get_heartbeat_service() -> HeartbeatService:
+    return HeartbeatService(get_database(), get_agent_service(), get_event_service(), get_settings())
+
+
+@lru_cache
 def get_provider_registry() -> ProviderRegistry:
-    return ProviderRegistry()
+    return ProviderRegistry(get_database())
 
 
 @lru_cache
@@ -64,4 +83,15 @@ def get_orchestrator() -> Orchestrator:
         chat=get_chat_service(),
         events=get_event_service(),
         providers=get_provider_registry(),
+    )
+
+
+@lru_cache
+def get_worker_service() -> WorkerService:
+    return WorkerService(
+        get_orchestrator(),
+        get_schedule_service(),
+        get_heartbeat_service(),
+        get_event_service(),
+        get_settings(),
     )

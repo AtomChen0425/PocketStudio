@@ -24,7 +24,7 @@ def temp_home() -> Path:
 
 
 def build_orchestrator(home: Path) -> Orchestrator:
-    settings = Settings(tinyagi_home=home)
+    settings = Settings(pocketStudio_home=home)
     db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
     db.initialize()
     events = EventService(db)

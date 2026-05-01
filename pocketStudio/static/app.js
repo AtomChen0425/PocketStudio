@@ -210,7 +210,7 @@ async function seedDemo() {
   });
   await api("/tasks", {
     method: "POST",
-    body: JSON.stringify({ title: "Wire TinyOffice frontend", description: "Build live workspace panels.", status: "in_progress" }),
+    body: JSON.stringify({ title: "Wire pocketStudio frontend", description: "Build live workspace panels.", status: "in_progress" }),
   });
   await loadAll();
 }

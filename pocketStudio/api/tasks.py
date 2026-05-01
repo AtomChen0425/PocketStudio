@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends
 
 from pocketStudio.api.errors import not_found
@@ -27,9 +29,12 @@ def get_task(task_id: int, service: TaskService = Depends(get_task_service)) -> 
 
 
 @router.put("/{task_id}", response_model=Task)
-def update_task(task_id: int, payload: TaskCreate, service: TaskService = Depends(get_task_service)) -> Task:
+def update_task(task_id: int, payload: dict[str, Any], service: TaskService = Depends(get_task_service)) -> Task:
     try:
-        return service.update(task_id, payload)
+        current = service.get(task_id)
+        merged = current.model_dump()
+        merged.update(payload)
+        return service.update(task_id, TaskCreate(**merged))
     except KeyError as exc:
         raise not_found(exc) from exc
 

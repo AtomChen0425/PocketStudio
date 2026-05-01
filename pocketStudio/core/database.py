@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS agents (
     model TEXT,
     workspace TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
+    heartbeat_enabled INTEGER NOT NULL DEFAULT 1,
+    heartbeat_interval INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -58,8 +60,109 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'todo',
     assignee TEXT,
+    assignee_type TEXT NOT NULL DEFAULT '',
+    project_id TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    prefix TEXT NOT NULL DEFAULT 'PS',
+    color TEXT NOT NULL DEFAULT '#84cc16',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS task_comments (
+    id TEXT PRIMARY KEY,
+    task_id INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    author_type TEXT NOT NULL DEFAULT 'user',
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    cron TEXT NOT NULL DEFAULT '',
+    run_at TEXT,
+    agent_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'web',
+    sender TEXT NOT NULL DEFAULT 'Web',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_fired_at INTEGER,
+    last_fire_key TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'web',
+    sender TEXT NOT NULL DEFAULT '',
+    message_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'web',
+    sender TEXT NOT NULL DEFAULT '',
+    sender_id TEXT,
+    message TEXT NOT NULL,
+    original_message TEXT NOT NULL DEFAULT '',
+    agent TEXT,
+    files TEXT,
+    metadata TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    acked_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS pairing_pending (
+    code TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pairing_approved (
+    channel TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    approved_at INTEGER NOT NULL,
+    approved_code TEXT,
+    PRIMARY KEY(channel, sender_id)
+);
+
+CREATE TABLE IF NOT EXISTS custom_providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    base_url TEXT NOT NULL DEFAULT '',
+    api_key TEXT NOT NULL DEFAULT '',
+    model TEXT
+);
+
+CREATE TABLE IF NOT EXISTS heartbeat_state (
+    agent_id TEXT PRIMARY KEY,
+    last_sent_at INTEGER NOT NULL,
+    last_message_id INTEGER,
+    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -88,6 +191,7 @@ class Database:
         try:
             with self.connect() as conn:
                 conn.executescript(SCHEMA)
+                self._migrate(conn)
         except sqlite3.OperationalError as exc:
             if self.journal_mode.upper() == "OFF":
                 raise
@@ -98,6 +202,22 @@ class Database:
                     stale_path.unlink()
             with self.connect() as conn:
                 conn.executescript(SCHEMA)
+                self._migrate(conn)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        self._add_column(conn, "tasks", "assignee_type", "TEXT NOT NULL DEFAULT ''")
+        self._add_column(conn, "tasks", "project_id", "TEXT")
+        self._add_column(conn, "tasks", "position", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column(conn, "schedules", "last_fired_at", "INTEGER")
+        self._add_column(conn, "schedules", "last_fire_key", "TEXT")
+        self._add_column(conn, "agents", "heartbeat_enabled", "INTEGER NOT NULL DEFAULT 1")
+        self._add_column(conn, "agents", "heartbeat_interval", "INTEGER")
+
+    @staticmethod
+    def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def execute(self, query: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
         with self.connect() as conn:

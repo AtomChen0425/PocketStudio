@@ -55,14 +55,23 @@ class Orchestrator:
         except Exception as exc:
             self.queue.mark_failed(message_id, str(exc))
             raise
-        self.queue.mark_done(message_id, result.model_dump_json())
+        completed = self.queue.mark_done(message_id, result.model_dump_json())
+        self.queue.enqueue_responses_from_message(completed)
         return result
 
     async def _dispatch(self, message: QueueMessage) -> OrchestrationResult:
         target_type, target_id = self._parse_target(message.target)
         if target_type == "agent":
             agent = self.agents.get(target_id)
+            self.queue.insert_agent_message(
+                agent.id,
+                "user",
+                message.content,
+                str(message.id),
+                sender=message.sender,
+            )
             run = await self._run_agent(agent, message.content, [])
+            self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
             return OrchestrationResult(
                 message_id=message.id,
                 target=message.target,
@@ -83,13 +92,30 @@ class Orchestrator:
             current_input = message.content
             context: list[str] = []
             for agent in agents:
+                self.queue.insert_agent_message(
+                    agent.id,
+                    "user",
+                    current_input,
+                    str(message.id),
+                    sender=message.sender,
+                )
                 run = await self._run_agent(agent, current_input, context)
                 runs.append(run)
+                self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                 context.append(run.output)
                 current_input = run.output
             output = runs[-1].output
         else:
             runs = await asyncio.gather(*(self._run_agent(agent, message.content, []) for agent in agents))
+            for run in runs:
+                self.queue.insert_agent_message(
+                    run.agent_id,
+                    "user",
+                    message.content,
+                    str(message.id),
+                    sender=message.sender,
+                )
+                self.queue.insert_agent_message(run.agent_id, "assistant", run.output, str(message.id), sender=run.agent_id)
             output = "\n\n".join(f"## {run.agent_id}\n{run.output}" for run in runs)
 
         self.chat.post(team.id, ChatMessageCreate(sender="orchestrator", message=output))

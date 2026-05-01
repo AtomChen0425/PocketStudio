@@ -2,4 +2,5 @@
 /.pytest-tmp
 /.pytest_cache
 /.upstream-tinyagi
+/.pocketStudio
 __pycache__/

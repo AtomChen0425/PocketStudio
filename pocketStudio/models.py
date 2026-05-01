@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TeamMode(StrEnum):
@@ -28,6 +28,8 @@ class AgentCreate(BaseModel):
     model: str | None = None
     workspace: Path | None = None
     enabled: bool = True
+    heartbeat_enabled: bool = True
+    heartbeat_interval: int | None = None
 
 
 class Agent(AgentCreate):
@@ -95,6 +97,11 @@ class TaskCreate(BaseModel):
     description: str = ""
     status: str = "todo"
     assignee: str | None = None
+    assignee_type: str = Field(default="", alias="assigneeType")
+    project_id: str | None = Field(default=None, alias="projectId")
+    position: int = 0
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class Task(TaskCreate):
@@ -103,9 +110,100 @@ class Task(TaskCreate):
     updated_at: str
 
 
+class ProjectCreate(BaseModel):
+    name: str
+    description: str = ""
+    prefix: str = "PS"
+    color: str = "#84cc16"
+    status: str = "active"
+
+
+class Project(ProjectCreate):
+    id: str
+    created_at: str
+    updated_at: str
+
+
+class TaskCommentCreate(BaseModel):
+    author: str = "Web"
+    author_type: str = Field(default="user", alias="authorType")
+    content: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TaskComment(TaskCommentCreate):
+    id: str
+    task_id: int
+    created_at: str
+
+
+class ScheduleCreate(BaseModel):
+    label: str | None = None
+    cron: str = ""
+    run_at: str | None = Field(default=None, alias="runAt")
+    agent_id: str = Field(alias="agentId")
+    message: str
+    channel: str = "web"
+    sender: str = "Web"
+    enabled: bool = True
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class Schedule(BaseModel):
+    id: str
+    label: str
+    cron: str
+    run_at: str | None = None
+    agent_id: str
+    message: str
+    channel: str
+    sender: str
+    enabled: bool
+    last_fired_at: int | None = None
+    last_fire_key: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class AgentMessage(BaseModel):
+    id: int
+    agent_id: str
+    role: str
+    channel: str
+    sender: str
+    message_id: str
+    content: str
+    created_at: int
+
+
+class QueueStatus(BaseModel):
+    incoming: int
+    queued: int
+    processing: int
+    outgoing: int
+    activeConversations: int
+
+
+class ResponseJob(BaseModel):
+    id: int
+    message_id: str
+    channel: str
+    sender: str
+    sender_id: str | None = None
+    message: str
+    original_message: str
+    agent: str | None = None
+    files: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    status: str
+    created_at: int
+    acked_at: int | None = None
+
+
 class Event(BaseModel):
     id: int
     type: str
     payload: dict
     created_at: str
-

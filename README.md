@@ -1,6 +1,6 @@
-# TinyAGI Python
+# pocketStudio
 
-A FastAPI backend that reimplements the core TinyAGI/TinyClaw ideas in Python:
+A FastAPI backend that reimplements the core TinyAGI/TinyClaw orchestration ideas in Python under the pocketStudio name:
 
 - durable SQLite queue with retry and dead-letter states
 - isolated agent definitions and workspaces
@@ -18,11 +18,11 @@ uvicorn pocketStudio.main:app --reload --port 3777
 ```
 
 API docs: http://localhost:3777/docs
-TinyOffice UI: http://localhost:3777/
+pocketStudio built-in UI: http://localhost:3777/
 
 ## Upstream TinyOffice Frontend
 
-The upstream TinyAGI `tinyoffice/` frontend has been copied into this project and adapted to call the local Python API.
+The upstream TinyAGI `tinyoffice/` frontend has been copied into this project and adapted to call the local pocketStudio Python API.
 
 Run the backend in one terminal:
 
@@ -48,5 +48,5 @@ Invoke-RestMethod -Method Post http://localhost:3777/api/messages -ContentType a
 Invoke-RestMethod http://localhost:3777/api/queue
 ```
 
-Data is stored under `.tinyagi/` by default. Override with `TINYAGI_HOME`.
-The default SQLite journal mode is `MEMORY` for broad Windows sandbox compatibility; set `TINYAGI_SQLITE_JOURNAL_MODE=WAL` for a production-like local daemon.
+Data is stored under `.pocketStudio/` by default. Override with `POCKETSTUDIO_POCKETSTUDIO_HOME`.
+The default SQLite journal mode is `MEMORY` for broad Windows sandbox compatibility; set `POCKETSTUDIO_SQLITE_JOURNAL_MODE=WAL` for a production-like local daemon.

@@ -6,15 +6,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from pocketStudio.api import agents, chat, messages, system, tasks, teams
+from pocketStudio.api import agents, chat, compat, messages, system, tasks, teams
 from pocketStudio.core.config import get_settings
-from pocketStudio.core.dependencies import get_database
+from pocketStudio.core.dependencies import get_database, get_worker_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_database().initialize()
+    settings = get_settings()
+    worker = get_worker_service()
+    if settings.worker_enabled:
+        worker.start()
     yield
+    await worker.stop()
 
 
 def create_app() -> FastAPI:
@@ -35,6 +40,7 @@ def create_app() -> FastAPI:
         return FileResponse(static_dir / "index.html")
 
     app.include_router(system.router, prefix=settings.api_prefix)
+    app.include_router(compat.router, prefix=settings.api_prefix)
     app.include_router(agents.router, prefix=settings.api_prefix)
     app.include_router(teams.router, prefix=settings.api_prefix)
     app.include_router(messages.router, prefix=settings.api_prefix)

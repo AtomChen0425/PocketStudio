@@ -10,20 +10,28 @@ from pocketStudio.providers.base import AgentProvider, ProviderRequest, Provider
 class OpenAICompatibleProvider(AgentProvider):
     name = "openai"
 
-    def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        name: str = "openai",
+        base_url: str | None = None,
+        api_key: str | None = None,
+        default_model: str | None = None,
+    ) -> None:
+        self.name = name
         self.base_url = (base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.default_model = default_model
 
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is required for the openai provider")
+            raise RuntimeError(f"An API key is required for the {self.name} provider")
 
         messages = [{"role": "system", "content": request.agent.system_prompt or request.agent.role}]
         messages.extend({"role": "assistant", "content": item} for item in request.context)
         messages.append({"role": "user", "content": request.input})
 
         payload = {
-            "model": request.agent.model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini",
+            "model": request.agent.model or self.default_model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini",
             "messages": messages,
         }
         async with httpx.AsyncClient(timeout=120) as client:
@@ -36,4 +44,3 @@ class OpenAICompatibleProvider(AgentProvider):
         body = response.json()
         text = body["choices"][0]["message"]["content"]
         return ProviderResponse(text=text, raw=body)
-

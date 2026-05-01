@@ -1,2 +1,1 @@
-"""TinyAGI Python backend package."""
-
+"""pocketStudio backend package."""

@@ -1,7 +1,7 @@
 [project]
-name = "tinyagi-python"
+name = "pocketstudio"
 version = "0.1.0"
-description = "Python/FastAPI reimplementation of TinyAGI-style multi-agent orchestration."
+description = "Python/FastAPI multi-agent orchestration backend inspired by TinyAGI."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
