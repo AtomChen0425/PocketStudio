@@ -20,9 +20,13 @@ def test_heartbeat_reads_agent_file_and_respects_interval() -> None:
     assert message.content == "Custom heartbeat prompt"
     assert second == []
 
-    snapshot = heartbeat.snapshot()
+    snapshot = heartbeat.snapshot(now_ms=1_000_100)
     assert snapshot["lastSent"][agent_id] == 1_000_000
     assert snapshot["lastMessageIds"][agent_id] == message.id
+    assert snapshot["agents"][agent_id]["lastSentAt"] == 1_000_000
+    assert snapshot["agents"][agent_id]["lastMessageId"] == message.id
+    assert snapshot["agents"][agent_id]["nextDueAt"] > 1_000_000
+    assert snapshot["agents"][agent_id]["due"] is False
 
 
 def test_agent_heartbeat_api_updates_runtime_config() -> None:

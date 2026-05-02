@@ -6,6 +6,7 @@ from pathlib import Path
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
 from pocketStudio.models import AgentCreate, AgentRun, MessageCreate, MessageStatus, TeamCreate, TeamMode
+from pocketStudio.providers.base import AgentProvider, ProviderRequest, ProviderResponse
 from pocketStudio.providers.registry import ProviderRegistry
 from pocketStudio.services.agent_service import AgentService
 from pocketStudio.services.chat_service import ChatService
@@ -240,5 +241,30 @@ def test_fanout_team_runs_all_agents() -> None:
         assert {run.agent_id for run in result.runs} == {"writer", "reviewer"}
         assert "## writer" in result.output
         assert "## reviewer" in result.output
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_agent_process_metadata_is_emitted_as_core_event() -> None:
+    class ProcessProvider(AgentProvider):
+        name = "process-provider"
+
+        async def run(self, request: ProviderRequest) -> ProviderResponse:
+            return ProviderResponse(text="done", raw={"process": {"pid": 123, "command": "tool"}})
+
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        orchestrator.providers.register(ProcessProvider())
+        orchestrator.agents.create(AgentCreate(id="runner", name="Runner", role="Runs", provider="process-provider"))
+
+        message = orchestrator.enqueue(MessageCreate(target="@agent:runner", content="Run it"))
+        asyncio.run(orchestrator.process_message(message.id))
+        events = orchestrator.events.list(limit=20)
+
+        process_events = [event for event in events if event.type == "agent.process"]
+        assert process_events
+        assert process_events[0].payload["agent_id"] == "runner"
+        assert process_events[0].payload["process"]["pid"] == 123
     finally:
         shutil.rmtree(home, ignore_errors=True)

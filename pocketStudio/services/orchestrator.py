@@ -341,6 +341,9 @@ class Orchestrator:
         provider = self.providers.get(agent.provider)
         self.events.emit("agent.started", {"agent_id": agent.id, "provider": agent.provider})
         response = await provider.run(ProviderRequest(agent=agent, input=input_text, context=context))
+        process = (response.raw or {}).get("process") if response.raw else None
+        if process:
+            self.events.emit("agent.process", {"agent_id": agent.id, "provider": agent.provider, "process": process})
         self.events.emit("agent.completed", {"agent_id": agent.id, "content": response.text})
         return AgentRun(agent_id=agent.id, input=input_text, output=response.text)
 

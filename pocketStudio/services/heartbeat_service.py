@@ -57,13 +57,33 @@ class HeartbeatService:
             fired.append(message)
         return fired
 
-    def snapshot(self) -> dict:
+    def snapshot(self, now_ms: int | None = None) -> dict:
         rows = self.db.fetch_all("SELECT * FROM heartbeat_state ORDER BY agent_id")
+        state_by_agent = {row["agent_id"]: row for row in rows}
+        now_ms = now_ms or int(time.time() * 1000)
+        agents = {}
+        for agent in self.agents.list():
+            interval_seconds = agent.heartbeat_interval or self.settings.heartbeat_interval_seconds
+            interval_ms = max(10, interval_seconds) * 1000
+            state = state_by_agent.get(agent.id)
+            last_sent_at = state["last_sent_at"] if state else None
+            next_due_at = (last_sent_at + interval_ms) if last_sent_at is not None else now_ms
+            enabled = bool(self.settings.heartbeat_enabled and agent.enabled and agent.heartbeat_enabled)
+            agents[agent.id] = {
+                "enabled": enabled,
+                "interval": interval_seconds,
+                "lastSentAt": last_sent_at,
+                "lastMessageId": state["last_message_id"] if state else None,
+                "nextDueAt": next_due_at if enabled else None,
+                "dueInMs": max(0, next_due_at - now_ms) if enabled else None,
+                "due": bool(enabled and next_due_at <= now_ms),
+            }
         return {
             "running": self.settings.heartbeat_enabled,
             "interval": self.settings.heartbeat_interval_seconds,
             "lastSent": {row["agent_id"]: row["last_sent_at"] for row in rows},
             "lastMessageIds": {row["agent_id"]: row["last_message_id"] for row in rows},
+            "agents": agents,
         }
 
     @staticmethod

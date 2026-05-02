@@ -47,14 +47,37 @@ class TaskService:
             raise KeyError(f"Task '{task_id}' not found")
         return self._to_task(row)
 
-    def list(self) -> list[Task]:
+    def list(
+        self,
+        project_id: str | None = None,
+        status: str | None = None,
+        assignee: str | None = None,
+        query: str | None = None,
+    ) -> list[Task]:
+        filters = []
+        params: list[str] = []
+        if project_id:
+            filters.append("tasks.project_id = ?")
+            params.append(project_id)
+        if status:
+            filters.append("tasks.status = ?")
+            params.append(status)
+        if assignee:
+            filters.append("tasks.assignee = ?")
+            params.append(assignee)
+        if query:
+            filters.append("(tasks.title LIKE ? OR tasks.description LIKE ?)")
+            params.extend([f"%{query}%", f"%{query}%"])
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
         rows = self.db.fetch_all(
-            """
+            f"""
             SELECT tasks.*, projects.prefix AS project_prefix
             FROM tasks
             LEFT JOIN projects ON tasks.project_id = projects.id
+            {where}
             ORDER BY tasks.status ASC, tasks.position ASC, tasks.id ASC
-            """
+            """,
+            params,
         )
         return [self._to_task(row) for row in rows]
 

@@ -11,6 +11,7 @@ class ProviderRequest(BaseModel):
     agent: Agent
     input: str
     context: list[str] = []
+    reset: bool = False
 
 
 class ProviderResponse(BaseModel):
@@ -24,4 +25,3 @@ class AgentProvider(ABC):
     @abstractmethod
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         """Execute an agent turn."""
-

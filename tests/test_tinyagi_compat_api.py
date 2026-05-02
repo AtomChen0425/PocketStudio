@@ -3,12 +3,27 @@ import json
 
 from fastapi.testclient import TestClient
 
-from pocketStudio.core.dependencies import get_settings
+from pocketStudio.core.dependencies import get_provider_registry, get_settings
 from pocketStudio.main import app
 
 
 def unique(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+class FakeProcess:
+    pid = 4321
+    returncode = None
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        return self.returncode or 0
 
 
 def test_settings_queue_agent_messages_and_responses() -> None:
@@ -166,6 +181,40 @@ def test_project_prefix_and_task_identifier_follow_tinyagi_shape() -> None:
     assert {task["id"] for task in filtered} >= {first["id"], second["id"]}
 
 
+def test_project_delete_detaches_tasks_and_task_filters_search_server_side() -> None:
+    client = TestClient(app)
+    project_response = client.post("/api/projects", json={"name": unique("Detach Project"), "description": "Cleanup"})
+    assert project_response.status_code == 200
+    project = project_response.json()["project"]
+
+    first = client.post(
+        "/api/tasks",
+        json={"title": unique("Alpha task"), "description": "Find me", "projectId": project["id"], "status": "todo"},
+    ).json()
+    second = client.post(
+        "/api/tasks",
+        json={"title": unique("Beta task"), "description": "Other", "projectId": project["id"], "status": "done"},
+    ).json()
+
+    projects = client.get("/api/projects").json()
+    listed_project = next(item for item in projects if item["id"] == project["id"])
+    assert listed_project["taskCount"] == 2
+
+    searched = client.get(f"/api/tasks?projectId={project['id']}&status=todo&q=Find").json()
+    assert [task["id"] for task in searched] == [first["id"]]
+
+    delete_response = client.delete(f"/api/projects/{project['id']}")
+    assert delete_response.status_code == 200
+
+    detached_first = client.get(f"/api/tasks/{first['id']}").json()
+    detached_second = client.get(f"/api/tasks/{second['id']}").json()
+    assert detached_first["projectId"] is None
+    assert detached_second["projectId"] is None
+    assert detached_first["identifier"].startswith("T-")
+    assert detached_second["identifier"].startswith("T-")
+    assert client.get(f"/api/tasks?projectId={project['id']}").json() == []
+
+
 def test_settings_sections_are_persisted() -> None:
     client = TestClient(app)
     workspace_name = unique("workspace")
@@ -194,6 +243,79 @@ def test_settings_sections_are_persisted() -> None:
     assert file_settings["workspace"]["name"] == workspace_name
     assert file_settings["channels"]["enabled"] == ["web", "cli"]
     assert file_settings["monitoring"]["heartbeat_interval"] == 123
+
+
+def test_settings_import_rejects_invalid_payload_without_writing() -> None:
+    client = TestClient(app)
+    before = client.get("/api/settings").json()
+
+    response = client.post("/api/settings/import", json={"settings": {"channels": {"enabled": "web"}}})
+
+    assert response.status_code == 422
+    assert "channels.enabled" in response.json()["detail"]
+    after = client.get("/api/settings").json()
+    assert after["channels"] == before["channels"]
+
+
+def test_settings_validate_reports_validity_without_writing() -> None:
+    client = TestClient(app)
+    before = client.get("/api/settings").json()
+
+    valid = client.post("/api/settings/validate", json={"settings": {"channels": {"enabled": ["web"]}}})
+    invalid = client.post("/api/settings/validate", json={"settings": {"monitoring": {"heartbeat_interval": -1}}})
+
+    assert valid.status_code == 200
+    assert valid.json() == {"ok": True}
+    assert invalid.status_code == 422
+    assert "heartbeat_interval" in invalid.json()["detail"]
+    after = client.get("/api/settings").json()
+    assert after["channels"] == before["channels"]
+    assert after["monitoring"] == before["monitoring"]
+
+
+def test_settings_backup_info_and_restore_backup() -> None:
+    client = TestClient(app)
+    before_name = unique("settings-before")
+    after_name = unique("settings-after")
+
+    first = client.put("/api/settings", json={"workspace": {"name": before_name}})
+    second = client.put("/api/settings", json={"workspace": {"name": after_name}})
+    backup = client.get("/api/settings/backup")
+    restored = client.post("/api/settings/restore-backup")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert backup.status_code == 200
+    assert backup.json()["backup"]["exists"] is True
+    assert restored.status_code == 200
+    assert restored.json()["settings"]["workspace"]["name"] == before_name
+    assert client.get("/api/settings").json()["workspace"]["name"] == before_name
+
+
+def test_process_list_and_kill_routes_expose_active_agent_processes() -> None:
+    client = TestClient(app)
+    registry = get_provider_registry()
+    agent_id = unique("proc-agent")
+    process = FakeProcess()
+    registry.processes.register(agent_id, process, {"command": "codex", "args": ["exec"], "cwd": "workspace"})
+    try:
+        listed = client.get("/api/processes")
+        killed = client.post(f"/api/processes/{agent_id}/kill")
+
+        assert listed.status_code == 200
+        item = next(item for item in listed.json()["processes"] if item["agent"] == agent_id)
+        assert item["pid"] == 4321
+        assert item["alive"] is True
+        assert item["command"] == "codex"
+        assert item["args"] == ["exec"]
+        assert item["cwd"] == "workspace"
+        assert killed.status_code == 200
+        assert killed.json() == {"ok": True, "agent": agent_id, "processKilled": True}
+        assert process.killed is True
+        assert all(item["agent"] != agent_id for item in client.get("/api/processes").json()["processes"])
+    finally:
+        registry.processes._processes.pop(agent_id, None)
+        registry.processes._metadata.pop(agent_id, None)
 
 
 def test_agent_and_team_crud_sync_to_settings_json() -> None:

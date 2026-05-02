@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import time
-from uuid import uuid4
-
 from pocketStudio.core.database import Database
+from pocketStudio.core.ids import prefixed_id
 from pocketStudio.models import Project, ProjectCreate, TaskComment, TaskCommentCreate
 from pocketStudio.services.event_service import EventService
 
@@ -72,15 +70,32 @@ class ProjectService:
         return project
 
     def delete_project(self, project_id: str) -> None:
+        task_rows = self.db.fetch_all("SELECT id FROM tasks WHERE project_id = ? ORDER BY id ASC", (project_id,))
+        for row in task_rows:
+            next_number = self._next_global_task_number()
+            self.db.execute(
+                """
+                UPDATE tasks
+                SET project_id = NULL,
+                    number = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (next_number, row["id"]),
+            )
         self.db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        self.events.emit("project.deleted", {"project_id": project_id})
+        self.events.emit("project.deleted", {"project_id": project_id, "detached_tasks": len(task_rows)})
+
+    def task_count(self, project_id: str) -> int:
+        row = self.db.fetch_one("SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?", (project_id,))
+        return int(row["count"]) if row else 0
 
     def list_comments(self, task_id: int) -> list[TaskComment]:
         rows = self.db.fetch_all("SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at", (task_id,))
         return [self._to_comment(row) for row in rows]
 
     def create_comment(self, task_id: int, payload: TaskCommentCreate) -> TaskComment:
-        comment_id = f"comment-{uuid4().hex[:12]}"
+        comment_id = prefixed_id("comment")
         self.db.execute(
             """
             INSERT INTO task_comments (id, task_id, author, author_type, content)
@@ -100,7 +115,7 @@ class ProjectService:
     @staticmethod
     def _project_id(name: str) -> str:
         slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in name).strip("-")
-        return f"{slug or 'project'}-{int(time.time() * 1000)}"
+        return prefixed_id(slug or "project")
 
     @staticmethod
     def generate_prefix(name: str) -> str:
@@ -110,6 +125,10 @@ class ProjectService:
         if len(words) == 1:
             return words[0][:3].upper()
         return "".join(word[0].upper() for word in words[:3])
+
+    def _next_global_task_number(self) -> int:
+        row = self.db.fetch_one("SELECT COALESCE(MAX(number), 0) + 1 AS next_number FROM tasks WHERE project_id IS NULL")
+        return int(row["next_number"]) if row else 1
 
     @staticmethod
     def _to_project(row) -> Project:

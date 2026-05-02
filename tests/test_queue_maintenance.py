@@ -63,3 +63,67 @@ def test_recover_stale_running_message() -> None:
 
     assert queue.recover_stale_messages(threshold_seconds=1) == 1
     assert queue.get(message.id).status == "failed"
+
+
+def test_done_messages_are_not_reprocessed_and_failed_messages_can_retry() -> None:
+    with TestClient(app) as client:
+        client.post("/api/worker/stop")
+        agent_id = f"queue-agent-{uuid.uuid4().hex[:8]}"
+        client.post("/api/agents", json={"id": agent_id, "name": "Queue Agent", "role": "Runs", "provider": "local"})
+        message_id = client.post(
+            "/api/messages",
+            json={"target": f"@agent:{agent_id}", "content": "run once", "sender": "test"},
+        ).json()["id"]
+
+        first_process = client.post(f"/api/messages/{message_id}/process")
+        second_process = client.post(f"/api/messages/{message_id}/process")
+
+        assert first_process.status_code == 200
+        assert second_process.status_code == 422
+        assert "not processable" in second_process.json()["detail"]
+
+        failed_id = client.post(
+            "/api/messages",
+            json={"target": f"@agent:missing-{uuid.uuid4().hex[:8]}", "content": "fail once", "sender": "test"},
+        ).json()["id"]
+        failed_process = client.post(f"/api/messages/{failed_id}/process")
+        assert failed_process.status_code == 404
+        assert client.get(f"/api/queue/{failed_id}").json()["status"] == "failed"
+
+        retry_response = client.post(f"/api/queue/{failed_id}/retry")
+        assert retry_response.status_code == 200
+        retried = retry_response.json()
+        assert retried["status"] == "queued"
+        assert retried["attempts"] == 0
+
+
+def test_processing_payload_uses_running_timestamp_and_metadata() -> None:
+    settings = Settings(pocketStudio_home=Path(".pytest-local") / f"processing-home-{uuid.uuid4().hex[:8]}")
+    db = Database(settings.database_path)
+    db.initialize()
+    queue = QueueService(db, EventService(db, settings), settings)
+    message = queue.enqueue(
+        MessageCreate(
+            target="@agent:runner",
+            content="still running",
+            sender="test",
+            metadata={"channel": "cli", "senderId": "tester-1"},
+        )
+    )
+    db.execute(
+        """
+        UPDATE messages
+        SET status = 'running', attempts = 2, updated_at = datetime('now', '-1 minute')
+        WHERE id = ?
+        """,
+        (message.id,),
+    )
+
+    payload = queue.processing_payloads()[0]
+
+    assert payload["messageId"] == str(message.id)
+    assert payload["agent"] == "runner"
+    assert payload["channel"] == "cli"
+    assert payload["senderId"] == "tester-1"
+    assert payload["attempts"] == 2
+    assert payload["duration"] >= 0

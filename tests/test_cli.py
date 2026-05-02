@@ -124,9 +124,9 @@ def test_cli_provider_save_maps_to_custom_provider_endpoint() -> None:
 def test_cli_logs_maps_to_logs_endpoint() -> None:
     client = FakeClient()
 
-    cli.main(["logs", "--limit", "5"], client=client)
+    cli.main(["logs", "--limit", "5", "--event-type", "message.queued", "--contains", "hello world"], client=client)
 
-    assert client.calls == [("GET", "/api/logs?limit=5", None)]
+    assert client.calls == [("GET", "/api/logs?limit=5&event_type=message.queued&contains=hello%20world", None)]
 
 
 def test_cli_settings_get_maps_to_settings_endpoint() -> None:
@@ -135,6 +135,22 @@ def test_cli_settings_get_maps_to_settings_endpoint() -> None:
     cli.main(["settings", "get"], client=client)
 
     assert client.calls == [("GET", "/api/settings", None)]
+
+
+def test_cli_settings_backup_maps_to_backup_endpoint() -> None:
+    client = FakeClient()
+
+    cli.main(["settings", "backup"], client=client)
+
+    assert client.calls == [("GET", "/api/settings/backup", None)]
+
+
+def test_cli_settings_restore_backup_maps_to_restore_endpoint() -> None:
+    client = FakeClient()
+
+    cli.main(["settings", "restore-backup"], client=client)
+
+    assert client.calls == [("POST", "/api/settings/restore-backup", {})]
 
 
 def test_cli_settings_import_posts_settings_file() -> None:
@@ -152,6 +168,36 @@ def test_cli_settings_import_posts_settings_file() -> None:
 
     assert client.calls == [
         ("POST", "/api/settings/import", {"settings": {"monitoring": {"heartbeat_interval": 42}}})
+    ]
+
+
+def test_cli_settings_validate_posts_settings_file_without_importing() -> None:
+    client = FakeClient()
+    temp_dir = Path(".pytest-tmp")
+    temp_dir.mkdir(exist_ok=True)
+    settings_file = temp_dir / f"settings-{uuid4().hex}.json"
+    settings_file.write_text('{"channels": {"enabled": ["web"]}}', encoding="utf-8")
+
+    cli.main(["settings", "validate", str(settings_file)], client=client)
+    try:
+        settings_file.unlink(missing_ok=True)
+    except PermissionError:
+        pass
+
+    assert client.calls == [
+        ("POST", "/api/settings/validate", {"settings": {"channels": {"enabled": ["web"]}}})
+    ]
+
+
+def test_cli_process_commands_map_to_process_endpoints() -> None:
+    client = FakeClient()
+
+    cli.main(["process", "list"], client=client)
+    cli.main(["process", "kill", "agent 1"], client=client)
+
+    assert client.calls == [
+        ("GET", "/api/processes", None),
+        ("POST", "/api/processes/agent%201/kill", {}),
     ]
 
 
@@ -240,3 +286,36 @@ def test_cli_daemon_commands_dispatch_to_manager() -> None:
     cli.run_daemon(argparse.Namespace(daemon_command="restart", host="127.0.0.1", port=3777), manager=manager)
 
     assert manager.calls == ["status", "start", "stop", "restart"]
+
+
+def test_cli_worker_maintenance_maps_to_worker_endpoint() -> None:
+    client = FakeClient()
+
+    cli.main(
+        [
+            "worker",
+            "maintenance",
+            "--older-than-ms",
+            "0",
+            "--stale-threshold-seconds",
+            "3",
+            "--prune-chats",
+        ],
+        client=client,
+    )
+
+    assert client.calls == [
+        ("POST", "/api/worker/maintenance?older_than_ms=0&stale_threshold_seconds=3&prune_chats=true", {})
+    ]
+
+
+def test_cli_worker_pause_and_resume_map_to_worker_endpoints() -> None:
+    client = FakeClient()
+
+    cli.main(["worker", "pause"], client=client)
+    cli.main(["worker", "resume"], client=client)
+
+    assert client.calls == [
+        ("POST", "/api/worker/pause", {}),
+        ("POST", "/api/worker/resume", {}),
+    ]

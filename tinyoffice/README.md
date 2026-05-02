@@ -1,6 +1,6 @@
-# TinyOffice
+# pocketStudio Office
 
-Web portal for TinyAGI. TinyOffice provides a browser UI for monitoring and operating your agent system.
+Web portal adapted from TinyOffice for pocketStudio. It provides a browser UI for monitoring and operating your agent system.
 
 ## Features
 
@@ -10,13 +10,13 @@ Web portal for TinyAGI. TinyOffice provides a browser UI for monitoring and oper
 - Team management (members + leader)
 - Task board (kanban + drag/drop + assign to agents/teams)
 - Logs and live events view
-- Settings editor for `.tinyagi/settings.json`
+- Settings editor for pocketStudio settings
 - Office simulation view of agent/team interactions
 
 ## Requirements
 
 - Node.js 18+
-- Running TinyAGI backend/API (default: `http://localhost:3777`)
+- Running pocketStudio backend/API (default: `http://localhost:3777`)
 
 ## Setup
 
@@ -27,7 +27,7 @@ npm install
 
 ## Configuration
 
-TinyOffice reads the backend base URL from `NEXT_PUBLIC_API_URL`.
+pocketStudio Office reads the backend base URL from `NEXT_PUBLIC_API_URL`.
 
 Default:
 
@@ -65,7 +65,7 @@ npm run start
 
 ## API Endpoints Used
 
-TinyOffice calls TinyAGI API endpoints such as:
+pocketStudio Office calls local API endpoints such as:
 
 - `POST /api/message`
 - `GET /api/agents`
@@ -88,5 +88,5 @@ TinyOffice calls TinyAGI API endpoints such as:
 
 ## Notes
 
-- TinyOffice is UI-only; it does not replace TinyAGI daemon processes.
-- Start TinyAGI first so queue processor, channels, and API are available.
+- pocketStudio Office is UI-only; it does not replace backend daemon processes.
+- Start pocketStudio first so queue processor, channels, and API are available.

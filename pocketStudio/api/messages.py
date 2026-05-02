@@ -48,3 +48,12 @@ def get_message(message_id: int, service: QueueService = Depends(get_queue_servi
     except KeyError as exc:
         raise not_found(exc) from exc
 
+
+@router.post("/queue/{message_id}/retry", response_model=QueueMessage)
+def retry_message(message_id: int, service: QueueService = Depends(get_queue_service)) -> QueueMessage:
+    try:
+        return service.retry_message(message_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

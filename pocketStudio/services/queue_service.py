@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
@@ -142,6 +143,20 @@ class QueueService:
         return recovered
 
     def mark_running(self, message_id: int) -> QueueMessage:
+        message = self.get(message_id)
+        if message.status not in {MessageStatus.queued, MessageStatus.failed}:
+            raise ValueError(f"Message '{message_id}' is not processable from status '{message.status}'")
+        if message.attempts >= self.settings.queue_max_attempts:
+            self.db.execute(
+                """
+                UPDATE messages
+                SET status = 'dead', error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                ("Maximum attempts exceeded", message_id),
+            )
+            self.events.emit("message.dead", {"message_id": message_id, "reason": "maximum attempts exceeded"})
+            raise ValueError(f"Message '{message_id}' exceeded maximum attempts")
         self.db.execute(
             """
             UPDATE messages
@@ -196,6 +211,21 @@ class QueueService:
         )
         self.events.emit("message.retry", {"message_id": message_id})
         return True
+
+    def retry_message(self, message_id: int) -> QueueMessage:
+        message = self.get(message_id)
+        if message.status not in {MessageStatus.failed, MessageStatus.dead}:
+            raise ValueError(f"Message '{message_id}' is not retryable from status '{message.status}'")
+        self.db.execute(
+            """
+            UPDATE messages
+            SET status = 'queued', attempts = 0, error = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (message_id,),
+        )
+        self.events.emit("message.retry", {"message_id": message_id, "from_status": message.status.value})
+        return self.get(message_id)
 
     def delete_dead(self, message_id: int) -> bool:
         row = self.db.fetch_one("SELECT id FROM messages WHERE id = ? AND status = 'dead'", (message_id,))
@@ -365,6 +395,39 @@ class QueueService:
             )
         return responses
 
+    def processing_payloads(self) -> list[dict]:
+        rows = self.db.fetch_all(
+            """
+            SELECT *
+            FROM messages
+            WHERE status = 'running'
+            ORDER BY updated_at ASC, id ASC
+            """
+        )
+        now_ms = int(time.time() * 1000)
+        payloads = []
+        for row in rows:
+            message = self._to_message(row)
+            started_at = self._timestamp_ms(message.updated_at)
+            payloads.append(
+                {
+                    "id": message.id,
+                    "messageId": str(message.id),
+                    "channel": message.metadata.get("channel", "web"),
+                    "sender": message.sender,
+                    "senderId": message.metadata.get("senderId") or message.metadata.get("sender_id"),
+                    "message": message.content,
+                    "agent": self._target_label(message.target),
+                    "target": message.target,
+                    "status": "processing",
+                    "attempts": message.attempts,
+                    "startedAt": started_at,
+                    "duration": max(0, now_ms - started_at),
+                    "metadata": message.metadata,
+                }
+            )
+        return payloads
+
     @staticmethod
     def _target_label(target: str) -> str:
         if target.startswith("@agent:") or target.startswith("@team:"):
@@ -376,6 +439,16 @@ class QueueService:
     def _pending_response_count(self) -> int:
         row = self.db.fetch_one("SELECT COUNT(*) AS count FROM responses WHERE status = 'pending'")
         return row["count"] if row else 0
+
+    @staticmethod
+    def _timestamp_ms(value: str) -> int:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return int(time.time() * 1000)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
 
     @staticmethod
     def _to_message(row) -> QueueMessage:

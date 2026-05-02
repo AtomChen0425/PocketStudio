@@ -55,7 +55,9 @@ def get_response_service() -> ResponseService:
 
 @lru_cache
 def get_plugin_service() -> PluginService:
-    return PluginService(get_settings(), get_event_service())
+    plugins = PluginService(get_settings(), get_event_service())
+    get_event_service().add_listener(plugins.handle_event)
+    return plugins
 
 
 @lru_cache

@@ -30,7 +30,6 @@ from pocketStudio.core.runtime import uptime_seconds
 from pocketStudio.models import (
     AgentCreate,
     MessageCreate,
-    MessageStatus,
     ProjectCreate,
     ScheduleCreate,
     TaskCommentCreate,
@@ -46,7 +45,7 @@ from pocketStudio.services.project_service import ProjectService
 from pocketStudio.services.plugin_service import PluginService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.schedule_service import ScheduleService
-from pocketStudio.services.settings_service import SettingsService
+from pocketStudio.services.settings_service import SettingsService, SettingsValidationError
 from pocketStudio.services.task_service import TaskService
 from pocketStudio.services.team_service import TeamService
 from pocketStudio.services.worker_service import WorkerService
@@ -106,8 +105,8 @@ def _task_payload(task, comment_count: int = 0) -> dict:
     }
 
 
-def _project_payload(project) -> dict:
-    return {
+def _project_payload(project, task_count: int | None = None) -> dict:
+    payload = {
         "id": project.id,
         "name": project.name,
         "description": project.description,
@@ -117,10 +116,13 @@ def _project_payload(project) -> dict:
         "createdAt": _millis(project.created_at),
         "updatedAt": _millis(project.updated_at),
     }
+    if task_count is not None:
+        payload["taskCount"] = task_count
+    return payload
 
 
 def _schedule_payload(schedule) -> dict:
-    return {
+    payload = {
         "id": schedule.id,
         "label": schedule.label,
         "cron": schedule.cron,
@@ -134,6 +136,13 @@ def _schedule_payload(schedule) -> dict:
         "lastFireKey": schedule.last_fire_key,
         "createdAt": int(time.time() * 1000),
     }
+    return payload
+
+
+def _schedule_payload_with_status(schedule, schedules: ScheduleService) -> dict:
+    payload = _schedule_payload(schedule)
+    payload.update(schedules.schedule_status(schedule))
+    return payload
 
 
 def _custom_providers(db: Database) -> dict:
@@ -202,6 +211,42 @@ def export_settings_snapshot(
     return {"ok": True, "settings": get_settings_snapshot(agents, teams, db, settings_service)}
 
 
+@router.post("/settings/validate")
+def validate_settings_snapshot(
+    payload: dict[str, Any],
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> dict:
+    settings_payload = payload.get("settings") if "settings" in payload else payload
+    if not isinstance(settings_payload, dict):
+        raise HTTPException(status_code=422, detail="settings payload must be an object")
+    try:
+        settings_service.validate(settings_payload)
+    except SettingsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.get("/settings/backup")
+def settings_backup_info(settings_service: SettingsService = Depends(get_settings_service)) -> dict:
+    return {"ok": True, "backup": settings_service.backup_info()}
+
+
+@router.post("/settings/restore-backup")
+def restore_settings_backup(
+    agents: AgentService = Depends(get_agent_service),
+    teams: TeamService = Depends(get_team_service),
+    db: Database = Depends(get_database),
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> dict:
+    try:
+        settings_service.restore_backup()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SettingsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "settings": get_settings_snapshot(agents, teams, db, settings_service)}
+
+
 @router.put("/settings")
 def update_settings_snapshot(
     payload: dict[str, Any],
@@ -211,7 +256,10 @@ def update_settings_snapshot(
     registry: ProviderRegistry = Depends(get_provider_registry),
     settings_service: SettingsService = Depends(get_settings_service),
 ) -> dict:
-    settings_service.update(payload)
+    try:
+        settings_service.update(payload)
+    except SettingsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     for provider_id, provider in (payload.get("models") or {}).get("custom_providers", {}).items():
         _save_custom_provider_row(provider_id, provider, db)
     for agent_id, config in (payload.get("agents") or {}).items():
@@ -254,6 +302,8 @@ def import_settings_snapshot(
     settings_service: SettingsService = Depends(get_settings_service),
 ) -> dict:
     settings_payload = payload.get("settings") if "settings" in payload else payload
+    if not isinstance(settings_payload, dict):
+        raise HTTPException(status_code=422, detail="settings payload must be an object")
     return update_settings_snapshot(settings_payload, agents, teams, db, registry, settings_service)
 
 
@@ -343,23 +393,23 @@ def queue_processing(
     queue: QueueService = Depends(get_queue_service),
     registry: ProviderRegistry = Depends(get_provider_registry),
 ) -> list[dict]:
-    items = queue.list(limit=100, status=MessageStatus.running)
-    now = int(time.time() * 1000)
-    return [
-        {
-            "id": item.id,
-            "messageId": str(item.id),
-            "channel": "web",
-            "sender": item.sender,
-            "message": item.content,
-            "agent": item.target,
-            "status": "processing",
-            "processAlive": registry.agent_process_alive(_target_agent_id(item.target)),
-            "startedAt": now,
-            "duration": 0,
-        }
-        for item in items
-    ]
+    items = queue.processing_payloads()
+    for item in items:
+        item["processAlive"] = registry.agent_process_alive(_target_agent_id(item["target"]))
+    return items
+
+
+@router.get("/processes")
+def active_processes(registry: ProviderRegistry = Depends(get_provider_registry)) -> dict:
+    return {"processes": registry.active_processes()}
+
+
+@router.post("/processes/{agent_id}/kill")
+async def kill_agent_process(
+    agent_id: str,
+    registry: ProviderRegistry = Depends(get_provider_registry),
+) -> dict:
+    return {"ok": True, "agent": agent_id, "processKilled": await registry.kill_agent(agent_id)}
 
 
 @router.post("/queue/processing/{message_id}/kill")
@@ -411,8 +461,14 @@ def prune_completed_messages(
 
 
 @router.get("/logs")
-def logs(limit: int = Query(default=100, ge=1, le=500), events: EventService = Depends(get_event_service)) -> dict:
-    return {"lines": events.log_lines(limit)}
+def logs(
+    limit: int = Query(default=100, ge=1, le=500),
+    event_type: str | None = None,
+    contains: str | None = None,
+    events: EventService = Depends(get_event_service),
+) -> dict:
+    records = events.log_records(limit=limit, event_type=event_type, contains=contains)
+    return {"lines": [record["line"] for record in records], "records": records}
 
 
 @router.get("/chats")
@@ -424,9 +480,11 @@ def list_chats(chat: ChatService = Depends(get_chat_service)) -> list[dict]:
 def read_chat_archive(
     team_id: str,
     limit: int = Query(default=500, ge=1, le=2000),
+    sender: str | None = None,
+    q: str | None = None,
     chat: ChatService = Depends(get_chat_service),
 ) -> dict:
-    messages = chat.list(team_id=team_id, limit=limit)
+    messages = chat.list(team_id=team_id, limit=limit, sender=sender, query=q)
     return {
         "teamId": team_id,
         "messages": [message.model_dump() for message in messages],
@@ -550,18 +608,19 @@ def list_projects(status: str | None = None, projects: ProjectService = Depends(
     all_projects = projects.list_projects()
     if status:
         all_projects = [project for project in all_projects if project.status == status]
-    return [_project_payload(project) for project in all_projects]
+    return [_project_payload(project, projects.task_count(project.id)) for project in all_projects]
 
 
 @router.post("/projects")
 def create_project(payload: ProjectCreate, projects: ProjectService = Depends(get_project_service)) -> dict:
-    return {"ok": True, "project": _project_payload(projects.create_project(payload))}
+    project = projects.create_project(payload)
+    return {"ok": True, "project": _project_payload(project, projects.task_count(project.id))}
 
 
 @router.get("/projects/{project_id}")
 def get_project(project_id: str, projects: ProjectService = Depends(get_project_service)) -> dict:
     try:
-        return _project_payload(projects.get_project(project_id))
+        return _project_payload(projects.get_project(project_id), projects.task_count(project_id))
     except KeyError as exc:
         raise not_found(exc) from exc
 
@@ -572,7 +631,8 @@ def update_project(project_id: str, payload: dict[str, Any], projects: ProjectSe
         current = projects.get_project(project_id)
         merged = current.model_dump()
         merged.update(payload)
-        return {"ok": True, "project": _project_payload(projects.update_project(project_id, ProjectCreate(**merged)))}
+        project = projects.update_project(project_id, ProjectCreate(**merged))
+        return {"ok": True, "project": _project_payload(project, projects.task_count(project.id))}
     except KeyError as exc:
         raise not_found(exc) from exc
 
@@ -638,7 +698,7 @@ def list_schedules(
     agent: str | None = None,
     schedules: ScheduleService = Depends(get_schedule_service),
 ) -> list[dict]:
-    return [_schedule_payload(schedule) for schedule in schedules.list(agent)]
+    return [_schedule_payload_with_status(schedule, schedules) for schedule in schedules.list(agent)]
 
 
 @router.post("/schedules")
@@ -658,7 +718,7 @@ def create_schedule(payload: dict[str, Any], schedules: ScheduleService = Depend
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "schedule": _schedule_payload(schedule)}
+    return {"ok": True, "schedule": _schedule_payload_with_status(schedule, schedules)}
 
 
 @router.put("/schedules/{schedule_id}")
@@ -681,7 +741,7 @@ def update_schedule(schedule_id: str, payload: dict[str, Any], schedules: Schedu
         raise not_found(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "schedule": _schedule_payload(schedule)}
+    return {"ok": True, "schedule": _schedule_payload_with_status(schedule, schedules)}
 
 
 @router.delete("/schedules/{schedule_id}")
@@ -732,6 +792,18 @@ async def worker_stop(worker: WorkerService = Depends(get_worker_service)) -> di
     return {"ok": True, "stopped": stopped, "worker": worker.snapshot()}
 
 
+@router.post("/worker/pause")
+async def worker_pause(worker: WorkerService = Depends(get_worker_service)) -> dict:
+    paused = worker.pause()
+    return {"ok": True, "paused": paused, "worker": worker.snapshot()}
+
+
+@router.post("/worker/resume")
+async def worker_resume(worker: WorkerService = Depends(get_worker_service)) -> dict:
+    resumed = worker.resume()
+    return {"ok": True, "resumed": resumed, "worker": worker.snapshot()}
+
+
 @router.post("/worker/restart")
 async def worker_restart(worker: WorkerService = Depends(get_worker_service)) -> dict:
     await worker.restart()
@@ -739,9 +811,20 @@ async def worker_restart(worker: WorkerService = Depends(get_worker_service)) ->
 
 
 @router.post("/worker/tick")
-async def worker_tick(worker: WorkerService = Depends(get_worker_service)) -> dict:
-    processed = await worker.process_once()
+async def worker_tick(force: bool = False, worker: WorkerService = Depends(get_worker_service)) -> dict:
+    processed = await worker.process_once(force=force)
     return {"ok": True, "processed": processed, "worker": worker.snapshot()}
+
+
+@router.post("/worker/maintenance")
+def worker_maintenance(
+    older_than_ms: int = 86_400_000,
+    stale_threshold_seconds: int | None = None,
+    prune_chats: bool = False,
+    worker: WorkerService = Depends(get_worker_service),
+) -> dict:
+    return {"ok": True, **worker.maintenance(older_than_ms, stale_threshold_seconds, prune_chats)}
+
 
 @router.post("/services/apply")
 async def apply_services(

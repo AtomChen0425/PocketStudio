@@ -1,5 +1,18 @@
+import {
+  normalizeAgent,
+  normalizeChatMessage,
+  normalizeTask,
+  normalizeTeam,
+  type BackendAgent,
+  type BackendChatMessage,
+  type BackendQueueMessage,
+  type BackendResponseData,
+  type BackendTask,
+  type BackendTeam,
+} from "./pocketstudio-adapter";
+
 const DEFAULT_API_BASE = "http://localhost:3777";
-const STORAGE_KEY = "tinyagi_api_base";
+const STORAGE_KEY = "pocketstudio_api_base";
 
 /** Resolve the API base URL. Priority: env > localStorage > default. */
 export function getApiBase(): string {
@@ -21,7 +34,7 @@ export function setApiBase(url: string | null): void {
   }
 }
 
-/** Check if the TinyAGI API is reachable at the given (or current) base URL. */
+/** Check if the pocketStudio API is reachable at the given (or current) base URL. */
 export async function checkConnection(baseUrl?: string): Promise<boolean> {
   const base = baseUrl ?? getApiBase();
   try {
@@ -44,122 +57,6 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return res.json();
-}
-
-type LocalAgent = {
-  id: string;
-  name: string;
-  role: string;
-  system_prompt?: string;
-  provider: string;
-  model?: string | null;
-  workspace?: string;
-  enabled?: boolean;
-};
-
-type LocalTeam = {
-  id: string;
-  name: string;
-  mode: "chain" | "fanout";
-  agent_ids: string[];
-};
-
-type LocalQueueMessage = {
-  id: number;
-  target: string;
-  content: string;
-  sender: string;
-  status: "queued" | "running" | "done" | "failed" | "dead";
-  attempts: number;
-  error?: string | null;
-  result?: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type LocalTask = {
-  id: number;
-  title: string;
-  description: string;
-  status: string;
-  assignee?: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-function toTimestamp(value?: string | number | null): number {
-  if (typeof value === "number") return value;
-  if (!value) return Date.now();
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Date.now();
-}
-
-function normalizeAgent(agent: LocalAgent): AgentConfig {
-  return {
-    name: agent.name,
-    provider: agent.provider || "local",
-    model: agent.model || "",
-    working_directory: agent.workspace || "",
-    system_prompt: agent.system_prompt || agent.role || "",
-  };
-}
-
-function normalizeTeam(team: LocalTeam): TeamConfig {
-  return {
-    name: team.name,
-    agents: team.agent_ids || [],
-    leader_agent: team.agent_ids?.[0] || "",
-  };
-}
-
-function normalizeTask(task: LocalTask): Task {
-  const status = (["backlog", "todo", "in_progress", "review", "done"].includes(task.status)
-    ? task.status
-    : task.status === "running"
-      ? "in_progress"
-      : "todo") as TaskStatus;
-  return {
-    id: String(task.id),
-    number: task.id,
-    identifier: `PY-${task.id}`,
-    title: task.title,
-    description: task.description || "",
-    status,
-    assignee: task.assignee || "",
-    assigneeType: task.assignee ? "agent" : "",
-    createdAt: toTimestamp(task.created_at),
-    updatedAt: toTimestamp(task.updated_at),
-  };
-}
-
-function parseRunResults(message: LocalQueueMessage): ResponseData[] {
-  if (!message.result) return [];
-  try {
-    const result = JSON.parse(message.result) as {
-      output?: string;
-      runs?: { agent_id: string; output: string }[];
-    };
-    const runs = result.runs?.length ? result.runs : [{ agent_id: "orchestrator", output: result.output || "" }];
-    return runs.map((run, index) => ({
-      channel: "web",
-      sender: message.sender,
-      message: run.output,
-      originalMessage: message.content,
-      timestamp: toTimestamp(message.updated_at) + index,
-      messageId: `${message.id}-${index}`,
-      agent: run.agent_id,
-    }));
-  } catch {
-    return [{
-      channel: "web",
-      sender: message.sender,
-      message: message.result,
-      originalMessage: message.content,
-      timestamp: toTimestamp(message.updated_at),
-      messageId: String(message.id),
-      agent: "orchestrator",
-    }];
-  }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -254,25 +151,17 @@ export interface AgentMessage {
 // ── API Functions ─────────────────────────────────────────────────────────
 
 export async function getAgents(): Promise<Record<string, AgentConfig>> {
-  const agents = await apiFetch<LocalAgent[]>("/api/agents");
+  const agents = await apiFetch<BackendAgent[]>("/api/agents");
   return Object.fromEntries(agents.map((agent) => [agent.id, normalizeAgent(agent)]));
 }
 
 export async function getTeams(): Promise<Record<string, TeamConfig>> {
-  const teams = await apiFetch<LocalTeam[]>("/api/teams");
+  const teams = await apiFetch<BackendTeam[]>("/api/teams");
   return Object.fromEntries(teams.map((team) => [team.id, normalizeTeam(team)]));
 }
 
 export async function getSettings(): Promise<Settings> {
-  const [agents, teams] = await Promise.all([getAgents(), getTeams()]);
-  return {
-    workspace: { name: "TinyAGI Python", path: ".tinyagi/workspace" },
-    channels: { enabled: ["web"] },
-    models: { provider: "local", openai: { model: "gpt-4o-mini" } },
-    agents,
-    teams,
-    monitoring: { heartbeat_interval: 60 },
-  };
+  return apiFetch<Settings>("/api/settings");
 }
 
 export async function searchRegistrySkills(
@@ -294,65 +183,48 @@ export async function installRegistrySkill(
 }
 
 export async function updateSettings(settings: Partial<Settings>): Promise<{ ok: boolean; settings: Settings }> {
-  return { ok: true, settings: { ...(await getSettings()), ...settings } };
+  return apiFetch<{ ok: boolean; settings: Settings }>("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
 }
 
 export async function runSetup(settings: Settings): Promise<{ ok: boolean; settings: Settings }> {
-  return { ok: true, settings };
+  return apiFetch("/api/setup", { method: "POST", body: JSON.stringify(settings) });
 }
 
 export async function applyServices(): Promise<{ ok: boolean; started: string[]; heartbeat: boolean; errors?: string[] }> {
-  return { ok: true, started: ["web"], heartbeat: false };
+  return apiFetch("/api/services/apply", { method: "POST" });
 }
 
 export async function getQueueStatus(): Promise<QueueStatus> {
-  const queue = await apiFetch<LocalQueueMessage[]>("/api/queue");
-  return {
-    incoming: queue.filter((item) => item.status === "queued").length,
-    queued: queue.filter((item) => item.status === "queued").length,
-    processing: queue.filter((item) => item.status === "running").length,
-    outgoing: queue.filter((item) => item.status === "done").length,
-    activeConversations: queue.filter((item) => item.status === "running" || item.status === "queued").length,
-  };
+  return apiFetch<QueueStatus>("/api/queue/status");
 }
 
 export async function getProcessingMessages(): Promise<ProcessingMessage[]> {
-  const queue = await apiFetch<LocalQueueMessage[]>("/api/queue?status=running");
-  return queue.map((item) => ({
-    id: item.id,
-    messageId: String(item.id),
-    channel: "web",
-    sender: item.sender,
-    message: item.content,
-    agent: item.target,
-    status: "processing",
-    processAlive: true,
-    startedAt: toTimestamp(item.updated_at),
-    duration: Date.now() - toTimestamp(item.updated_at),
-  }));
+  return apiFetch<ProcessingMessage[]>("/api/queue/processing");
 }
 
 export async function killAgentSession(id: number): Promise<{ ok: boolean; agent: string; processKilled: boolean }> {
-  return { ok: true, agent: String(id), processKilled: false };
+  return apiFetch(`/api/queue/processing/${encodeURIComponent(String(id))}/kill`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function getResponses(limit = 20): Promise<ResponseData[]> {
-  const queue = await apiFetch<LocalQueueMessage[]>(`/api/queue?status=done&limit=${limit}`);
-  return queue.flatMap(parseRunResults).slice(0, limit);
+  return apiFetch<BackendResponseData[]>(`/api/responses?limit=${limit}`);
 }
 
 export async function getLogs(limit = 100): Promise<{ lines: string[] }> {
-  const events = await apiFetch<{ id: number; type: string; payload: Record<string, unknown>; created_at: string }[]>(`/api/events?limit=${limit}`);
-  return {
-    lines: events.map((event) => `${event.created_at} ${event.type} ${JSON.stringify(event.payload)}`),
-  };
+  return apiFetch(`/api/logs?limit=${limit}`);
 }
 
 export async function saveAgent(
   id: string,
   agent: Partial<AgentConfig> & Pick<AgentConfig, "name" | "provider" | "model">
 ): Promise<{ ok: boolean; agent: AgentConfig }> {
-  const saved = await apiFetch<LocalAgent>("/api/agents", {
+  const saved = await apiFetch<BackendAgent>("/api/agents", {
     method: "POST",
     body: JSON.stringify({
       id,
@@ -363,6 +235,8 @@ export async function saveAgent(
       model: agent.model || null,
       workspace: agent.working_directory || null,
       enabled: true,
+      heartbeat_enabled: agent.heartbeat?.enabled ?? true,
+      heartbeat_interval: agent.heartbeat?.interval ?? null,
     }),
   });
   return { ok: true, agent: normalizeAgent(saved) };
@@ -376,13 +250,14 @@ export async function saveTeam(
   id: string,
   team: TeamConfig
 ): Promise<{ ok: boolean; team: TeamConfig }> {
-  const saved = await apiFetch<LocalTeam>("/api/teams", {
+  const saved = await apiFetch<BackendTeam>("/api/teams", {
     method: "POST",
     body: JSON.stringify({
       id,
       name: team.name,
       mode: "chain",
       agent_ids: team.agents,
+      leaderAgent: team.leader_agent || "",
     }),
   });
   return { ok: true, team: normalizeTeam(saved) };
@@ -399,9 +274,9 @@ export async function sendMessage(payload: {
   channel?: string;
 }): Promise<{ ok: boolean; messageId: string }> {
   const targetMatch = payload.message.match(/^@(team:)?([a-zA-Z0-9_-]+)/);
-  const agent = payload.agent || targetMatch?.[2] || "tinyagi";
+  const agent = payload.agent || targetMatch?.[2] || "pocketstudio";
   const target = targetMatch?.[1] ? `@team:${agent}` : `@agent:${agent}`;
-  const message = await apiFetch<LocalQueueMessage>("/api/messages", {
+  const message = await apiFetch<BackendQueueMessage>("/api/messages", {
     method: "POST",
     body: JSON.stringify({
       target,
@@ -417,39 +292,11 @@ export async function getAgentMessages(
   limit = 100,
   sinceId = 0
 ): Promise<AgentMessage[]> {
-  const queue = await apiFetch<LocalQueueMessage[]>(`/api/queue?limit=${limit}`);
-  const messages: AgentMessage[] = [];
-  queue.reverse().forEach((item) => {
-    const timestamp = toTimestamp(item.created_at);
-    if (item.id <= sinceId) return;
-    if (item.target.endsWith(agentId) || item.result?.includes(`"agent_id":"${agentId}"`) || item.result?.includes(`"agent_id": "${agentId}"`)) {
-      messages.push({
-        id: item.id * 2,
-        agent_id: agentId,
-        role: "user",
-        channel: "web",
-        sender: item.sender,
-        message_id: String(item.id),
-        content: item.content,
-        created_at: timestamp,
-      });
-      parseRunResults(item)
-        .filter((run) => run.agent === agentId)
-        .forEach((run, index) => {
-          messages.push({
-            id: item.id * 2 + index + 1,
-            agent_id: agentId,
-            role: "assistant",
-            channel: "web",
-            sender: agentId,
-            message_id: run.messageId,
-            content: run.message,
-            created_at: run.timestamp,
-          });
-        });
-    }
+  const params = new URLSearchParams({
+    limit: String(limit),
+    since_id: String(sinceId),
   });
-  return messages.slice(-limit);
+  return apiFetch(`/api/agents/${encodeURIComponent(agentId)}/messages?${params.toString()}`);
 }
 
 // ── Agent Workspace Data ──────────────────────────────────────────────────
@@ -461,34 +308,35 @@ export interface WorkspaceSkill {
 }
 
 export async function getAgentSkills(agentId: string): Promise<WorkspaceSkill[]> {
-  return [];
+  return apiFetch(`/api/agents/${encodeURIComponent(agentId)}/skills`);
 }
 
 export async function getAgentSystemPrompt(agentId: string): Promise<{ content: string; path: string }> {
-  const agents = await apiFetch<LocalAgent[]>("/api/agents");
-  const agent = agents.find((item) => item.id === agentId);
-  return { content: agent?.system_prompt || agent?.role || "", path: agent?.workspace ? `${agent.workspace}/AGENTS.md` : "" };
+  return apiFetch(`/api/agents/${encodeURIComponent(agentId)}/system-prompt`);
 }
 
 export async function saveAgentSystemPrompt(agentId: string, content: string): Promise<{ ok: boolean }> {
-  const local = await apiFetch<LocalAgent>(`/api/agents/${encodeURIComponent(agentId)}`);
-  await apiFetch<LocalAgent>("/api/agents", {
-    method: "POST",
-    body: JSON.stringify({ ...local, system_prompt: content, workspace: local.workspace || null }),
+  return apiFetch(`/api/agents/${encodeURIComponent(agentId)}/system-prompt`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
   });
-  return { ok: true };
 }
 
 export async function getAgentMemory(agentId: string): Promise<{ index: string; files: { name: string; path: string }[]; memoryDir: string }> {
-  return { index: "Memory is not implemented in the Python adapter yet.", files: [], memoryDir: "" };
+  return apiFetch(`/api/agents/${encodeURIComponent(agentId)}/memory`);
 }
 
 export async function getAgentHeartbeat(agentId: string): Promise<{ content: string; path: string; enabled: boolean; interval?: number }> {
-  return { content: "", path: "", enabled: false };
+  return apiFetch<{ content: string; path: string; enabled: boolean; interval?: number }>(
+    `/api/agents/${encodeURIComponent(agentId)}/heartbeat`
+  );
 }
 
 export async function saveAgentHeartbeat(agentId: string, data: { content?: string; enabled?: boolean; interval?: number }): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch<{ ok: boolean }>(`/api/agents/${encodeURIComponent(agentId)}/heartbeat`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────
@@ -510,31 +358,35 @@ export interface Task {
 }
 
 export async function getTasks(): Promise<Task[]> {
-  const tasks = await apiFetch<LocalTask[]>("/api/tasks");
+  const tasks = await apiFetch<BackendTask[]>("/api/tasks");
   return tasks.map(normalizeTask);
 }
 
 export async function createTask(task: Partial<Task>): Promise<{ ok: boolean; task: Task }> {
-  const saved = await apiFetch<LocalTask>("/api/tasks", {
+  const saved = await apiFetch<BackendTask>("/api/tasks", {
     method: "POST",
     body: JSON.stringify({
       title: task.title || "Untitled task",
       description: task.description || "",
       status: task.status || "todo",
       assignee: task.assignee || null,
+      assigneeType: task.assigneeType || "",
+      projectId: task.projectId || null,
     }),
   });
   return { ok: true, task: normalizeTask(saved) };
 }
 
 export async function updateTask(id: string, task: Partial<Task>): Promise<{ ok: boolean; task: Task }> {
-  const updated = await apiFetch<LocalTask>(`/api/tasks/${encodeURIComponent(id)}`, {
+  const updated = await apiFetch<BackendTask>(`/api/tasks/${encodeURIComponent(id)}`, {
     method: "PUT",
     body: JSON.stringify({
       title: task.title,
       description: task.description,
       status: task.status,
       assignee: task.assignee,
+      assigneeType: task.assigneeType,
+      projectId: task.projectId,
     }),
   });
   return { ok: true, task: normalizeTask(updated) };
@@ -546,12 +398,15 @@ export async function deleteTask(id: string): Promise<{ ok: boolean }> {
 }
 
 export async function getTask(id: string): Promise<Task & { commentCount: number }> {
-  const task = await apiFetch<LocalTask>(`/api/tasks/${encodeURIComponent(id)}`);
-  return { ...normalizeTask(task), commentCount: 0 };
+  const task = await apiFetch<BackendTask>(`/api/tasks/${encodeURIComponent(id)}`);
+  return { ...normalizeTask(task), commentCount: task.commentCount || 0 };
 }
 
 export async function reorderTasks(columns: Record<string, string[]>): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch<{ ok: boolean }>("/api/tasks/reorder", {
+    method: "PUT",
+    body: JSON.stringify({ columns }),
+  });
 }
 
 // ── Comments ──────────────────────────────────────────────────────────────
@@ -566,28 +421,21 @@ export interface Comment {
 }
 
 export async function getComments(taskId: string): Promise<Comment[]> {
-  return [];
+  return apiFetch<Comment[]>(`/api/tasks/${encodeURIComponent(taskId)}/comments`);
 }
 
 export async function createComment(
   taskId: string,
   data: { author: string; authorType: "user" | "agent"; content: string }
 ): Promise<{ ok: boolean; comment: Comment }> {
-  return {
-    ok: true,
-    comment: {
-      id: `${taskId}-${Date.now()}`,
-      taskId,
-      author: data.author,
-      authorType: data.authorType,
-      content: data.content,
-      createdAt: Date.now(),
-    },
-  };
+  return apiFetch<{ ok: boolean; comment: Comment }>(`/api/tasks/${encodeURIComponent(taskId)}/comments`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function deleteComment(id: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch<{ ok: boolean }>(`/api/comments/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // ── Chat Room ────────────────────────────────────────────────────────────
@@ -605,16 +453,10 @@ export async function getChatMessages(
   limit = 100,
   sinceId = 0
 ): Promise<ChatMessage[]> {
-  const messages = await apiFetch<{ id: number; team_id: string; sender: string; message: string; created_at: string }[]>(
+  const messages = await apiFetch<BackendChatMessage[]>(
     `/api/chatroom/${encodeURIComponent(teamId)}?limit=${limit}&since=${sinceId}`,
   );
-  return messages.map((message) => ({
-    id: message.id,
-    team_id: message.team_id,
-    from_agent: message.sender,
-    message: message.message,
-    created_at: toTimestamp(message.created_at),
-  }));
+  return messages.map(normalizeChatMessage);
 }
 
 export async function postChatMessage(
@@ -642,48 +484,30 @@ export interface Project {
 }
 
 export async function getProjects(): Promise<Project[]> {
-  return [];
+  return apiFetch<Project[]>("/api/projects");
 }
 
 export async function createProject(
   data: Pick<Project, "name" | "description">
 ): Promise<{ ok: boolean; project: Project }> {
-  return {
-    ok: true,
-    project: {
-      id: `project-${Date.now()}`,
-      name: data.name,
-      description: data.description,
-      prefix: "PY",
-      color: "#84cc16",
-      status: "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    },
-  };
+  return apiFetch<{ ok: boolean; project: Project }>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function updateProject(
   id: string,
   data: Partial<Omit<Project, "id" | "createdAt">>
 ): Promise<{ ok: boolean; project: Project }> {
-  return {
-    ok: true,
-    project: {
-      id,
-      name: data.name || id,
-      description: data.description || "",
-      prefix: data.prefix || "PY",
-      color: data.color || "#84cc16",
-      status: data.status || "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    },
-  };
+  return apiFetch<{ ok: boolean; project: Project }>(`/api/projects/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function deleteProject(id: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // ── Schedules ─────────────────────────────────────────────────────────────
@@ -702,7 +526,8 @@ export interface Schedule {
 }
 
 export async function getSchedules(agentId?: string): Promise<Schedule[]> {
-  return [];
+  const params = agentId ? `?agent=${encodeURIComponent(agentId)}` : "";
+  return apiFetch(`/api/schedules${params}`);
 }
 
 export async function createSchedule(data: {
@@ -714,46 +539,21 @@ export async function createSchedule(data: {
   channel?: string;
   sender?: string;
 }): Promise<{ ok: boolean; schedule: Schedule }> {
-  return {
-    ok: true,
-    schedule: {
-      id: `schedule-${Date.now()}`,
-      label: data.label || "Schedule",
-      cron: data.cron || "",
-      agentId: data.agentId,
-      message: data.message,
-      channel: data.channel || "web",
-      sender: data.sender || "Web",
-      enabled: true,
-      createdAt: Date.now(),
-      runAt: data.runAt,
-    },
-  };
+  return apiFetch("/api/schedules", { method: "POST", body: JSON.stringify(data) });
 }
 
 export async function updateSchedule(
   id: string,
   data: Partial<Omit<Schedule, "id" | "createdAt">>
 ): Promise<{ ok: boolean; schedule: Schedule }> {
-  return {
-    ok: true,
-    schedule: {
-      id,
-      label: data.label || "Schedule",
-      cron: data.cron || "",
-      agentId: data.agentId || "",
-      message: data.message || "",
-      channel: data.channel || "web",
-      sender: data.sender || "Web",
-      enabled: data.enabled ?? true,
-      createdAt: Date.now(),
-      runAt: data.runAt,
-    },
-  };
+  return apiFetch(`/api/schedules/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function deleteSchedule(id: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // ── Control Plane ─────────────────────────────────────────────────────────
@@ -765,29 +565,23 @@ export async function getSystemStatus(): Promise<{
   channels: Record<string, { running: boolean; pid?: number }>;
   heartbeat: { running: boolean; interval: number; lastSent: Record<string, number> };
 }> {
-  return {
-    ok: true,
-    uptime: 0,
-    server: { running: true, port: 3777 },
-    channels: { web: { running: true } },
-    heartbeat: { running: false, interval: 60, lastSent: {} },
-  };
+  return apiFetch("/api/status");
 }
 
 export async function restartService(): Promise<{ ok: boolean; action: string }> {
-  return { ok: true, action: "noop" };
+  return apiFetch("/api/services/restart", { method: "POST" });
 }
 
 export async function startChannel(channelId: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch(`/api/services/channel/${encodeURIComponent(channelId)}/start`, { method: "POST" });
 }
 
 export async function stopChannel(channelId: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch(`/api/services/channel/${encodeURIComponent(channelId)}/stop`, { method: "POST" });
 }
 
 export async function restartChannel(channelId: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch(`/api/services/channel/${encodeURIComponent(channelId)}/restart`, { method: "POST" });
 }
 
 // ── Pairing ───────────────────────────────────────────────────────────────
@@ -815,43 +609,44 @@ export interface PairingState {
 }
 
 export async function getPairings(): Promise<PairingState> {
-  return { pending: [], approved: [] };
+  return apiFetch("/api/pairing");
 }
 
 export async function approvePairing(code: string): Promise<{ ok: boolean; entry?: PairingApproved }> {
-  return { ok: true };
+  return apiFetch("/api/pairing/approve", { method: "POST", body: JSON.stringify({ code }) });
 }
 
 export async function revokePairing(channel: string, senderId: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch(`/api/pairing/${encodeURIComponent(channel)}/${encodeURIComponent(senderId)}`, { method: "DELETE" });
 }
 
 export async function dismissPending(code: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch(`/api/pairing/pending/${encodeURIComponent(code)}`, { method: "DELETE" });
 }
 
 // ── Custom Providers ──────────────────────────────────────────────────────
 
 export interface CustomProvider {
   name: string;
-  harness: "claude" | "codex";
+  harness: "openai" | "claude" | "codex";
   base_url: string;
   api_key: string;
   model?: string;
 }
 
 export async function getCustomProviders(): Promise<Record<string, CustomProvider>> {
-  return {
-    local: { name: "Local dry-run", harness: "codex", base_url: getApiBase(), api_key: "", model: "local" },
-  };
+  return apiFetch<Record<string, CustomProvider>>("/api/custom-providers");
 }
 
 export async function saveCustomProvider(id: string, provider: CustomProvider): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch<{ ok: boolean }>(`/api/custom-providers/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(provider),
+  });
 }
 
 export async function deleteCustomProvider(id: string): Promise<{ ok: boolean }> {
-  return { ok: true };
+  return apiFetch<{ ok: boolean }>(`/api/custom-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // ── SSE ───────────────────────────────────────────────────────────────────

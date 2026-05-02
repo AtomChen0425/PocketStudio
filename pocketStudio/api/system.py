@@ -33,7 +33,7 @@ def events(
     return service.list(limit=limit, since=since)
 
 
-def _tinyoffice_event(event: Event) -> tuple[str, dict]:
+def _office_event(event: Event) -> tuple[str, dict]:
     payload = event.payload
     timestamp = int(__import__("datetime").datetime.fromisoformat(event.created_at.replace("Z", "+00:00")).timestamp() * 1000)
     if event.type == "message.queued":
@@ -74,7 +74,7 @@ async def event_stream(service: EventService = Depends(get_event_service)) -> St
             events = list(reversed(service.list(limit=100, since=last_id)))
             for event in events:
                 last_id = max(last_id, event.id)
-                event_name, data = _tinyoffice_event(event)
+                event_name, data = _office_event(event)
                 yield f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
             await asyncio.sleep(1)
 

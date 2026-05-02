@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
+from typing import Callable
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
@@ -12,6 +14,7 @@ class EventService:
     def __init__(self, db: Database, settings: Settings | None = None) -> None:
         self.db = db
         self.settings = settings
+        self._listeners: list[Callable[[Event], None]] = []
 
     def emit(self, event_type: str, payload: dict) -> Event:
         payload_json = json.dumps(payload)
@@ -22,7 +25,12 @@ class EventService:
         row = self.db.fetch_one("SELECT * FROM events WHERE id = ?", (cursor.lastrowid,))
         event = self._to_event(row)
         self._append_log(event.type, payload_json, event.created_at)
+        self._notify(event)
         return event
+
+    def add_listener(self, listener: Callable[[Event], None]) -> None:
+        if listener not in self._listeners:
+            self._listeners.append(listener)
 
     def list(self, limit: int = 100, since: int = 0) -> list[Event]:
         rows = self.db.fetch_all(
@@ -37,6 +45,22 @@ class EventService:
         lines = self.settings.log_file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
         return lines[-limit:]
 
+    def log_records(
+        self,
+        limit: int = 100,
+        event_type: str | None = None,
+        contains: str | None = None,
+    ) -> list[dict]:
+        records = []
+        for line in self.log_lines(limit=5000):
+            if contains and contains not in line:
+                continue
+            record = self._parse_log_line(line)
+            if event_type and record.get("type") != event_type:
+                continue
+            records.append(record)
+        return records[-limit:]
+
     def _append_log(self, event_type: str, payload_json: str, created_at: str | None = None) -> None:
         if self.settings is None:
             return
@@ -45,6 +69,31 @@ class EventService:
         line = f"[{timestamp}] [EVENT] {event_type} {payload_json}\n"
         with self.settings.log_file_path.open("a", encoding="utf-8") as handle:
             handle.write(line)
+
+    def _notify(self, event: Event) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(event)
+            except Exception:
+                continue
+
+    @staticmethod
+    def _parse_log_line(line: str) -> dict:
+        match = re.match(r"^\[(?P<timestamp>[^\]]+)\]\s+\[(?P<level>[^\]]+)\]\s+(?P<type>\S+)\s+(?P<payload>.*)$", line)
+        if not match:
+            return {"line": line, "timestamp": None, "level": None, "type": None, "payload": None}
+        payload_text = match.group("payload")
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            payload = payload_text
+        return {
+            "line": line,
+            "timestamp": match.group("timestamp"),
+            "level": match.group("level"),
+            "type": match.group("type"),
+            "payload": payload,
+        }
 
     @staticmethod
     def _to_event(row) -> Event:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,10 @@ DEFAULT_SETTINGS = {
 }
 
 
+class SettingsValidationError(ValueError):
+    pass
+
+
 class SettingsService:
     def __init__(self, db: Database, settings: Settings) -> None:
         self.db = db
@@ -29,17 +34,72 @@ class SettingsService:
         return result
 
     def update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.validate(payload)
         current = self.snapshot()
         next_settings = self._merge(current, payload)
         self.write(next_settings)
         return self.snapshot()
 
+    def validate(self, payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            raise SettingsValidationError("settings payload must be an object")
+        allowed = {"workspace", "channels", "models", "monitoring", "agents", "teams"}
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise SettingsValidationError(f"unknown settings section(s): {', '.join(unknown)}")
+        self._validate_object(payload, "workspace")
+        self._validate_object(payload, "channels")
+        self._validate_object(payload, "models")
+        self._validate_object(payload, "monitoring")
+        self._validate_mapping(payload, "agents")
+        self._validate_mapping(payload, "teams")
+
+        workspace = payload.get("workspace") or {}
+        if "name" in workspace and not isinstance(workspace["name"], str):
+            raise SettingsValidationError("workspace.name must be a string")
+        if "path" in workspace and not isinstance(workspace["path"], str):
+            raise SettingsValidationError("workspace.path must be a string")
+
+        channels = payload.get("channels") or {}
+        if "enabled" in channels:
+            enabled = channels["enabled"]
+            if not isinstance(enabled, list) or not all(isinstance(item, str) and item for item in enabled):
+                raise SettingsValidationError("channels.enabled must be a list of non-empty strings")
+        if "defaults" in channels and not isinstance(channels["defaults"], dict):
+            raise SettingsValidationError("channels.defaults must be an object")
+
+        monitoring = payload.get("monitoring") or {}
+        if "heartbeat_interval" in monitoring:
+            interval = monitoring["heartbeat_interval"]
+            if not isinstance(interval, int) or interval <= 0:
+                raise SettingsValidationError("monitoring.heartbeat_interval must be a positive integer")
+
+        models = payload.get("models") or {}
+        if "provider" in models and not isinstance(models["provider"], str):
+            raise SettingsValidationError("models.provider must be a string")
+        if "custom_providers" in models and not isinstance(models["custom_providers"], dict):
+            raise SettingsValidationError("models.custom_providers must be an object")
+
+    @staticmethod
+    def _validate_object(payload: dict[str, Any], key: str) -> None:
+        if key in payload and not isinstance(payload[key], dict):
+            raise SettingsValidationError(f"{key} must be an object")
+
+    @staticmethod
+    def _validate_mapping(payload: dict[str, Any], key: str) -> None:
+        if key not in payload:
+            return
+        value = payload[key]
+        if not isinstance(value, dict):
+            raise SettingsValidationError(f"{key} must be an object")
+        if not all(isinstance(item_key, str) and item_key for item_key in value):
+            raise SettingsValidationError(f"{key} keys must be non-empty strings")
+
     def write(self, settings: dict[str, Any]) -> None:
         self.settings.pocketStudio_home.mkdir(parents=True, exist_ok=True)
-        self.settings.settings_path.write_text(
-            json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._backup_current_settings()
+        serialized = json.dumps(settings, ensure_ascii=False, indent=2) + "\n"
+        self.settings.settings_path.write_text(serialized, encoding="utf-8")
         for key in ("workspace", "channels", "models", "monitoring", "agents", "teams"):
             if key in settings:
                 self.db.execute(
@@ -87,6 +147,38 @@ class SettingsService:
         workspace_path = (settings.get("workspace") or {}).get("path")
         if workspace_path:
             Path(workspace_path).expanduser().mkdir(parents=True, exist_ok=True)
+
+    def backup_info(self) -> dict[str, Any]:
+        backup = self.backup_path
+        return {
+            "exists": backup.exists(),
+            "path": str(backup),
+            "size": backup.stat().st_size if backup.exists() else 0,
+            "modifiedAt": int(backup.stat().st_mtime * 1000) if backup.exists() else None,
+        }
+
+    def restore_backup(self) -> dict[str, Any]:
+        backup = self.backup_path
+        if not backup.exists():
+            raise FileNotFoundError(f"Settings backup '{backup}' not found")
+        raw = backup.read_text(encoding="utf-8")
+        try:
+            restored = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise SettingsValidationError(f"settings backup is not valid JSON: {exc.msg}") from exc
+        self.validate(restored)
+        self.write(restored)
+        return self.snapshot()
+
+    @property
+    def backup_path(self) -> Path:
+        return self.settings.settings_path.with_suffix(self.settings.settings_path.suffix + ".bak")
+
+    def _backup_current_settings(self) -> None:
+        path = self.settings.settings_path
+        if not path.exists():
+            return
+        shutil.copyfile(path, self.backup_path)
 
     @classmethod
     def _merge(cls, current: Any, update: Any) -> Any:

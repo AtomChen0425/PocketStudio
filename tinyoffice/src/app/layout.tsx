@@ -4,7 +4,7 @@ import { AppShell } from "@/components/app-shell";
 import { ThemeProvider } from "@/components/theme-provider";
 
 export const metadata: Metadata = {
-  title: "TinyAGI | The AI Company Emulator",
+  title: "pocketStudio | The AI Company Emulator",
   description: "The AI Company Emulator",
 };
 

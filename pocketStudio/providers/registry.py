@@ -2,39 +2,57 @@ from __future__ import annotations
 
 from pocketStudio.core.database import Database
 from pocketStudio.providers.base import AgentProvider
-from pocketStudio.providers.codex import CodexProvider
+from pocketStudio.providers.cli_agent import ClaudeProvider, OpenCodeProvider, provider_from_command
+from pocketStudio.providers.codex import CodexProvider, codex_provider_from_command
 from pocketStudio.providers.local import LocalEchoProvider
 from pocketStudio.providers.openai_compatible import OpenAICompatibleProvider
 from pocketStudio.providers.subprocess import ProcessRegistry
 
 
 class ProviderRegistry:
+    BUILTIN_PROVIDERS = {"local", "openai", "codex", "anthropic", "opencode"}
+
     def __init__(self, db: Database | None = None) -> None:
         self.db = db
         self.processes = ProcessRegistry()
+        self._manual_provider_names: set[str] = set()
         self._providers: dict[str, AgentProvider] = {
             "local": LocalEchoProvider(),
-            "openai": OpenAICompatibleProvider(),
-            "codex": CodexProvider(registry=self.processes),
+            "openai": CodexProvider(registry=self.processes),
+            "anthropic": ClaudeProvider(registry=self.processes),
+            "opencode": OpenCodeProvider(registry=self.processes),
         }
         self.reload_custom()
 
     def register(self, provider: AgentProvider) -> None:
         self._providers[provider.name] = provider
+        if provider.name not in self.BUILTIN_PROVIDERS:
+            self._manual_provider_names.add(provider.name)
 
     def reload_custom(self) -> None:
         for key in list(self._providers):
-            if key not in {"local", "openai", "codex"}:
+            if key not in self.BUILTIN_PROVIDERS and key not in self._manual_provider_names:
                 del self._providers[key]
         if self.db is None:
             return
         rows = self.db.fetch_all("SELECT * FROM custom_providers ORDER BY id")
         for row in rows:
             if row["harness"] == "codex":
-                provider = CodexProvider(registry=self.processes)
+                command = row["base_url"] or ""
+                provider = codex_provider_from_command(command, self.processes) if command else CodexProvider(registry=self.processes)
                 provider.name = row["id"]
                 self.register(provider)
-            elif row["harness"] in {"openai", "claude"}:
+            elif row["harness"] == "claude":
+                command = row["base_url"] or ""
+                provider = provider_from_command(row["id"], command, self.processes) if command else ClaudeProvider(registry=self.processes)
+                provider.name = row["id"]
+                self.register(provider)
+            elif row["harness"] == "opencode":
+                command = row["base_url"] or ""
+                provider = provider_from_command(row["id"], command, self.processes) if command else OpenCodeProvider(registry=self.processes)
+                provider.name = row["id"]
+                self.register(provider)
+            elif row["harness"] == "openai":
                 self.register(
                     OpenAICompatibleProvider(
                         name=row["id"],
@@ -70,3 +88,6 @@ class ProviderRegistry:
             for provider in self._providers.values()
             if (is_alive := getattr(provider, "is_alive", None))
         )
+
+    def active_processes(self) -> list[dict]:
+        return self.processes.snapshot()

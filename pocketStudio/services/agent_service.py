@@ -89,6 +89,7 @@ class AgentService:
         (workspace / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
         (workspace / ".claude").mkdir(exist_ok=True)
         (workspace / "memory").mkdir(exist_ok=True)
+        self._ensure_claude_skills_link(workspace)
         agents_md = workspace / "AGENTS.md"
         if not agents_md.exists():
             agents_md.write_text("", encoding="utf-8")
@@ -171,17 +172,8 @@ class AgentService:
         agent = self.get(agent_id)
         memory_dir = agent.workspace / "memory"
         memory_dir.mkdir(parents=True, exist_ok=True)
-        entries: list[str] = []
-        for path in sorted(memory_dir.rglob("*.md")):
-            if any(part.startswith(".") for part in path.relative_to(memory_dir).parts):
-                continue
-            text = path.read_text(encoding="utf-8", errors="ignore")
-            frontmatter = self._parse_frontmatter(text)
-            if not frontmatter:
-                continue
-            relative = path.relative_to(memory_dir).as_posix()
-            entries.append(f"- **{frontmatter['name']}** - {frontmatter['summary']}  `{relative}`")
-        return "\n".join(entries)
+        tree = self.scan_memory_tree(memory_dir, "")
+        return self._format_memory_tree(tree)
 
     def list_memory_files(self, agent_id: str) -> dict:
         agent = self.get(agent_id)
@@ -190,9 +182,15 @@ class AgentService:
         files = [
             {"name": path.name, "path": str(path), "relativePath": path.relative_to(memory_dir).as_posix()}
             for path in sorted(memory_dir.rglob("*.md"))
-            if path.is_file()
+            if path.is_file() and not any(part.startswith(".") for part in path.relative_to(memory_dir).parts)
         ]
-        return {"index": self.load_memory_index(agent_id), "files": files, "memoryDir": str(memory_dir)}
+        tree = self.scan_memory_tree(memory_dir, "")
+        return {
+            "index": self._format_memory_tree(tree),
+            "tree": tree,
+            "files": files,
+            "memoryDir": str(memory_dir),
+        }
 
     def list_skills(self, agent_id: str) -> list[dict]:
         agent = self.get(agent_id)
@@ -215,7 +213,64 @@ class AgentService:
         skill_path = target / "SKILL.md"
         if not skill_path.exists():
             skill_path.write_text(f"# {ref}\n\nInstalled placeholder for pocketStudio.\n", encoding="utf-8")
+        self._ensure_claude_skills_link(agent.workspace)
         return skill_path
+
+    @classmethod
+    def scan_memory_tree(cls, dir_path: Path, relative_path: str) -> dict:
+        folder = {
+            "name": dir_path.name,
+            "path": relative_path,
+            "entries": [],
+            "subfolders": [],
+        }
+        if not dir_path.exists():
+            return folder
+        for item in sorted(dir_path.iterdir(), key=lambda path: path.name):
+            if item.name.startswith("."):
+                continue
+            item_relative = f"{relative_path}/{item.name}" if relative_path else item.name
+            if item.is_dir():
+                subfolder = cls.scan_memory_tree(item, item_relative)
+                if subfolder["entries"] or subfolder["subfolders"]:
+                    folder["subfolders"].append(subfolder)
+            elif item.is_file() and item.suffix == ".md":
+                frontmatter = cls._parse_frontmatter(item.read_text(encoding="utf-8", errors="ignore"))
+                if frontmatter:
+                    folder["entries"].append(
+                        {
+                            "name": frontmatter["name"],
+                            "summary": frontmatter["summary"],
+                            "filePath": item_relative,
+                        }
+                    )
+        return folder
+
+    @classmethod
+    def _format_memory_tree(cls, folder: dict, indent: int = 0) -> str:
+        prefix = "  " * indent
+        lines: list[str] = []
+        for entry in folder.get("entries", []):
+            lines.append(f"{prefix}- **{entry['name']}** - {entry['summary']}  `{entry['filePath']}`")
+        for subfolder in folder.get("subfolders", []):
+            lines.append(f"{prefix}- **[{subfolder['name']}/]**")
+            subtree = cls._format_memory_tree(subfolder, indent + 1)
+            if subtree:
+                lines.append(subtree)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _ensure_claude_skills_link(workspace: Path) -> None:
+        source = workspace / ".agents" / "skills"
+        target = workspace / ".claude" / "skills"
+        source.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() or target.is_symlink():
+            return
+        try:
+            target.symlink_to(Path("..") / ".agents" / "skills", target_is_directory=True)
+        except OSError:
+            target.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _safe_name(value: str) -> str:

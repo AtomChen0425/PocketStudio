@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 DEFAULT_API_URL = "http://127.0.0.1:3777"
@@ -202,14 +203,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     logs = sub.add_parser("logs", help="Show recent log lines")
     logs.add_argument("--limit", type=int, default=100)
+    logs.add_argument("--event-type")
+    logs.add_argument("--contains")
 
     settings = sub.add_parser("settings", help="Settings operations")
     settings_sub = settings.add_subparsers(dest="settings_command", required=True)
     settings_sub.add_parser("get")
+    settings_sub.add_parser("backup")
+    settings_sub.add_parser("restore-backup")
     export_settings = settings_sub.add_parser("export")
     export_settings.add_argument("path")
     import_settings = settings_sub.add_parser("import")
     import_settings.add_argument("path")
+    validate_settings = settings_sub.add_parser("validate")
+    validate_settings.add_argument("path")
 
     send = sub.add_parser("send", help="Send a message")
     send.add_argument("message")
@@ -227,10 +234,20 @@ def build_parser() -> argparse.ArgumentParser:
     delete = queue_sub.add_parser("delete-dead")
     delete.add_argument("message_id", type=int)
 
+    process = sub.add_parser("process", help="Active agent process operations")
+    process_sub = process.add_subparsers(dest="process_command", required=True)
+    process_sub.add_parser("list")
+    kill_process = process_sub.add_parser("kill")
+    kill_process.add_argument("agent_id")
+
     worker = sub.add_parser("worker", help="Background worker operations")
     worker_sub = worker.add_subparsers(dest="worker_command", required=True)
-    for name in ("status", "start", "stop", "restart", "tick"):
+    for name in ("status", "start", "stop", "pause", "resume", "restart", "tick"):
         worker_sub.add_parser(name)
+    maintenance = worker_sub.add_parser("maintenance")
+    maintenance.add_argument("--older-than-ms", type=int, default=86_400_000)
+    maintenance.add_argument("--stale-threshold-seconds", type=int)
+    maintenance.add_argument("--prune-chats", action="store_true")
 
     agent = sub.add_parser("agent", help="Agent operations")
     agent_sub = agent.add_subparsers(dest="agent_command", required=True)
@@ -281,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     save_provider = provider_sub.add_parser("save")
     save_provider.add_argument("id")
     save_provider.add_argument("--name", required=True)
-    save_provider.add_argument("--harness", choices=["openai", "codex", "claude"], default="openai")
+    save_provider.add_argument("--harness", choices=["openai", "codex", "claude", "opencode"], default="openai")
     save_provider.add_argument("--base-url", default="")
     save_provider.add_argument("--api-key", default="")
     save_provider.add_argument("--model")
@@ -371,7 +388,12 @@ def run(args: argparse.Namespace, client: ApiClient) -> int:
     if args.command == "daemon":
         return run_daemon(args)
     if args.command == "logs":
-        return print_json(client.get(f"/api/logs?limit={args.limit}"))
+        params = [f"limit={args.limit}"]
+        if args.event_type:
+            params.append(f"event_type={quote(args.event_type)}")
+        if args.contains:
+            params.append(f"contains={quote(args.contains)}")
+        return print_json(client.get(f"/api/logs?{'&'.join(params)}"))
     if args.command == "settings":
         return run_settings(args, client)
     if args.command == "send":
@@ -388,9 +410,21 @@ def run(args: argparse.Namespace, client: ApiClient) -> int:
             return print_json(client.post(f"/api/queue/dead/{args.message_id}/retry", {}))
         if args.queue_command == "delete-dead":
             return print_json(client.delete(f"/api/queue/dead/{args.message_id}"))
+    if args.command == "process":
+        if args.process_command == "list":
+            return print_json(client.get("/api/processes"))
+        if args.process_command == "kill":
+            return print_json(client.post(f"/api/processes/{quote(args.agent_id)}/kill", {}))
     if args.command == "worker":
         if args.worker_command == "status":
             return print_json(client.get("/api/worker/status"))
+        if args.worker_command == "maintenance":
+            params = [f"older_than_ms={args.older_than_ms}"]
+            if args.stale_threshold_seconds is not None:
+                params.append(f"stale_threshold_seconds={args.stale_threshold_seconds}")
+            if args.prune_chats:
+                params.append("prune_chats=true")
+            return print_json(client.post(f"/api/worker/maintenance?{'&'.join(params)}", {}))
         return print_json(client.post(f"/api/worker/{args.worker_command}", {}))
     if args.command == "agent":
         return run_agent(args, client)
@@ -434,6 +468,10 @@ def run_agent(args: argparse.Namespace, client: ApiClient) -> int:
 def run_settings(args: argparse.Namespace, client: ApiClient) -> int:
     if args.settings_command == "get":
         return print_json(client.get("/api/settings"))
+    if args.settings_command == "backup":
+        return print_json(client.get("/api/settings/backup"))
+    if args.settings_command == "restore-backup":
+        return print_json(client.post("/api/settings/restore-backup", {}))
     if args.settings_command == "export":
         snapshot = client.get("/api/settings/export")
         Path(args.path).write_text(json.dumps(snapshot.get("settings", snapshot), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -441,6 +479,9 @@ def run_settings(args: argparse.Namespace, client: ApiClient) -> int:
     if args.settings_command == "import":
         payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
         return print_json(client.post("/api/settings/import", {"settings": payload}))
+    if args.settings_command == "validate":
+        payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
+        return print_json(client.post("/api/settings/validate", {"settings": payload}))
     raise SystemExit(f"Unknown settings command: {args.settings_command}")
 
 

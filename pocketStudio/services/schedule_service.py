@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import uuid4
+from datetime import datetime, timedelta, timezone
 
 from pocketStudio.core.database import Database
+from pocketStudio.core.ids import prefixed_id
 from pocketStudio.models import MessageCreate, QueueMessage, Schedule, ScheduleCreate
 from pocketStudio.services.event_service import EventService
 from pocketStudio.services.queue_service import QueueService
@@ -21,9 +21,41 @@ class ScheduleService:
             rows = self.db.fetch_all("SELECT * FROM schedules ORDER BY created_at DESC")
         return [self._to_schedule(row) for row in rows]
 
+    def schedule_status(self, schedule: Schedule, now: datetime | None = None) -> dict:
+        now = now or datetime.now(timezone.utc)
+        next_fire_at = self.next_fire_at(schedule, now)
+        next_fire_ms = self._epoch_ms(next_fire_at) if next_fire_at else None
+        now_ms = self._epoch_ms(now)
+        return {
+            "nextFireAt": next_fire_ms,
+            "dueInMs": max(0, next_fire_ms - now_ms) if next_fire_ms is not None else None,
+            "due": bool(schedule.enabled and next_fire_ms is not None and next_fire_ms <= now_ms),
+        }
+
+    def next_fire_at(self, schedule: Schedule, now: datetime | None = None) -> datetime | None:
+        now = now or datetime.now(timezone.utc)
+        if not schedule.enabled:
+            return None
+        if schedule.run_at:
+            run_at = self._parse_datetime(schedule.run_at)
+            if run_at is None:
+                return None
+            return run_at
+        if not schedule.cron:
+            return None
+        cursor = now.replace(second=0, microsecond=0)
+        if now.second or now.microsecond:
+            cursor += timedelta(minutes=1)
+        for _ in range(366 * 24 * 60):
+            fire_key = cursor.strftime("%Y-%m-%dT%H:%M")
+            if schedule.last_fire_key != fire_key and self._cron_matches(schedule.cron, cursor):
+                return cursor
+            cursor += timedelta(minutes=1)
+        return None
+
     def create(self, payload: ScheduleCreate) -> Schedule:
         self._validate_payload(payload)
-        schedule_id = f"schedule-{uuid4().hex[:12]}"
+        schedule_id = prefixed_id("schedule")
         label = payload.label or payload.cron or payload.run_at or f"Message {payload.agent_id}"
         self.db.execute(
             """

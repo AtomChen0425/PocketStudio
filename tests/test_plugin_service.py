@@ -45,3 +45,67 @@ def test_plugin_hooks_transform_incoming_and_outgoing() -> None:
     assert jobs[0].message == "reply [out]"
     assert jobs[0].metadata["parseMode"] == "markdown"
     assert jobs[0].metadata["plugins"] == ["demo"]
+
+
+def test_python_plugin_module_hooks_and_event_handlers() -> None:
+    home = Path(".pytest-local") / f"plugin-home-{uuid4().hex[:8]}"
+    plugin_dir = home / "plugins" / "python-demo"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.py").write_text(
+        '''
+def transform_incoming(message, ctx):
+    return {"text": f"{message} [py-in]", "metadata": {"incoming": ctx["sender"]}}
+
+
+def transform_outgoing(message, ctx):
+    return f"[py-out] {message}"
+
+
+def activate(ctx):
+    ctx.log("INFO", f"home={ctx.get_pocketstudio_home()}")
+
+    def on_custom(event):
+        ctx.log("INFO", f"saw {event['type']}:{event['value']}")
+
+    ctx.on("custom.event", on_custom)
+
+
+hooks = {
+    "transformIncoming": transform_incoming,
+    "transformOutgoing": transform_outgoing,
+}
+        ''',
+        encoding="utf-8",
+    )
+    settings = Settings(pocketStudio_home=home)
+    db = Database(settings.database_path)
+    db.initialize()
+    events = EventService(db)
+    plugins = PluginService(settings, events)
+    events.add_listener(plugins.handle_event)
+
+    listed = plugins.list_plugins()
+    assert listed == [
+        {
+            "name": "python-demo",
+            "path": str(plugin_dir),
+            "enabled": True,
+            "hooks": ["transformIncoming", "transformOutgoing"],
+            "runtime": "python",
+        }
+    ]
+
+    incoming = plugins.run_incoming_hooks("hello", {"channel": "web", "sender": "tester"})
+    outgoing = plugins.run_outgoing_hooks("reply", {"channel": "web", "sender": "tester"})
+    events.emit("custom.event", {"value": "42"})
+
+    assert incoming.text == "hello [py-in]"
+    assert incoming.metadata["incoming"] == "tester"
+    assert incoming.metadata["plugins"] == ["python-demo"]
+    assert outgoing.text == "[py-out] reply"
+    assert outgoing.metadata["plugins"] == ["python-demo"]
+
+    log_events = [event for event in events.list(limit=20) if event.type == "plugin.log"]
+    messages = [event.payload["message"] for event in log_events]
+    assert any(message.startswith("home=") for message in messages)
+    assert "saw custom.event:42" in messages

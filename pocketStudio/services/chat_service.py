@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from pocketStudio.core.database import Database
 from pocketStudio.models import ChatMessage, ChatMessageCreate
 from pocketStudio.services.event_service import EventService
@@ -25,24 +27,51 @@ class ChatService:
             raise KeyError(f"Chat message '{message_id}' not found")
         return self._to_message(row)
 
-    def list(self, team_id: str, limit: int = 100, since: int = 0) -> list[ChatMessage]:
+    def list(
+        self,
+        team_id: str,
+        limit: int = 100,
+        since: int = 0,
+        sender: str | None = None,
+        query: str | None = None,
+    ) -> list[ChatMessage]:
+        filters = ["team_id = ?", "id > ?"]
+        params: list[object] = [team_id, since]
+        if sender:
+            filters.append("sender = ?")
+            params.append(sender)
+        if query:
+            filters.append("message LIKE ?")
+            params.append(f"%{query}%")
         rows = self.db.fetch_all(
-            """
+            f"""
             SELECT * FROM chat_messages
-            WHERE team_id = ? AND id > ?
+            WHERE {' AND '.join(filters)}
             ORDER BY id DESC
             LIMIT ?
             """,
-            (team_id, since, limit),
+            [*params, limit],
         )
-        return [self._to_message(row) for row in rows]
+        return list(reversed([self._to_message(row) for row in rows]))
 
     def archives(self) -> list[dict]:
         rows = self.db.fetch_all(
             """
-            SELECT team_id, COUNT(*) AS count, MAX(created_at) AS last_time, MAX(id) AS last_message_id
-            FROM chat_messages
-            GROUP BY team_id
+            SELECT c.team_id,
+                   COUNT(*) AS count,
+                   MAX(c.created_at) AS last_time,
+                   MAX(c.id) AS last_message_id,
+                   latest.sender AS last_sender,
+                   latest.message AS last_message
+            FROM chat_messages c
+            JOIN chat_messages latest
+              ON latest.id = (
+                  SELECT id FROM chat_messages
+                  WHERE team_id = c.team_id
+                  ORDER BY id DESC
+                  LIMIT 1
+              )
+            GROUP BY c.team_id
             ORDER BY last_time DESC
             """
         )
@@ -53,9 +82,20 @@ class ChatService:
                 "time": row["last_time"],
                 "count": row["count"],
                 "lastMessageId": row["last_message_id"],
+                "lastSender": row["last_sender"],
+                "lastMessage": row["last_message"],
             }
             for row in rows
         ]
+
+    def prune(self, older_than_ms: int) -> int:
+        cutoff = int(datetime.now(timezone.utc).timestamp() * 1000) - older_than_ms
+        rows = self.db.fetch_all("SELECT id FROM chat_messages WHERE strftime('%s', created_at) * 1000 < ?", (cutoff,))
+        for row in rows:
+            self.db.execute("DELETE FROM chat_messages WHERE id = ?", (row["id"],))
+        if rows:
+            self.events.emit("chat.pruned", {"count": len(rows)})
+        return len(rows)
 
     @staticmethod
     def _to_message(row) -> ChatMessage:

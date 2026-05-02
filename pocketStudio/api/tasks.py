@@ -15,16 +15,10 @@ def list_tasks(
     projectId: str | None = None,
     status: str | None = None,
     assignee: str | None = None,
+    q: str | None = None,
     service: TaskService = Depends(get_task_service),
 ) -> list[Task]:
-    tasks = service.list()
-    if projectId:
-        tasks = [task for task in tasks if task.project_id == projectId]
-    if status:
-        tasks = [task for task in tasks if task.status == status]
-    if assignee:
-        tasks = [task for task in tasks if task.assignee == assignee]
-    return tasks
+    return service.list(project_id=projectId, status=status, assignee=assignee, query=q)
 
 
 @router.post("", response_model=Task)
