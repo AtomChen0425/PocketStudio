@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -31,6 +32,9 @@ class AgentService:
 
     def create(self, payload: AgentCreate) -> Agent:
         workspace = payload.workspace or self.settings.workspace_path / payload.id
+        heartbeat_interval = payload.heartbeat_interval
+        if heartbeat_interval is None:
+            heartbeat_interval = self._default_heartbeat_interval()
         self.ensure_workspace(workspace, payload)
         self.db.execute(
             """
@@ -58,10 +62,12 @@ class AgentService:
                 str(workspace),
                 int(payload.enabled),
                 int(payload.heartbeat_enabled),
-                payload.heartbeat_interval,
+                heartbeat_interval,
             ),
         )
-        return self.get(payload.id)
+        agent = self.get(payload.id)
+        self._sync_agent_settings(agent)
+        return agent
 
     def get(self, agent_id: str) -> Agent:
         row = self.db.fetch_one("SELECT * FROM agents WHERE id = ?", (agent_id,))
@@ -75,6 +81,7 @@ class AgentService:
 
     def delete(self, agent_id: str) -> None:
         self.db.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+        self._remove_agent_settings(agent_id)
 
     def ensure_workspace(self, workspace: Path, payload: AgentCreate | None = None) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
@@ -227,6 +234,57 @@ class AgentService:
         if not values.get("name") or not values.get("summary"):
             return None
         return {"name": values["name"], "summary": values["summary"]}
+
+    def _default_heartbeat_interval(self) -> int:
+        file_settings = self._read_settings_file()
+        try:
+            value = (file_settings.get("monitoring") or {}).get("heartbeat_interval")
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            pass
+        row = self.db.fetch_one("SELECT value FROM app_settings WHERE key = ?", ("monitoring",))
+        if row is not None:
+            try:
+                value = json.loads(row["value"]).get("heartbeat_interval")
+                if value is not None:
+                    return int(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+        return self.settings.heartbeat_interval_seconds
+
+    def _read_settings_file(self) -> dict:
+        path = self.settings.settings_path
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+    def _write_settings_file(self, data: dict) -> None:
+        self.settings.pocketStudio_home.mkdir(parents=True, exist_ok=True)
+        self.settings.settings_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def _sync_agent_settings(self, agent: Agent) -> None:
+        data = self._read_settings_file()
+        agents = data.setdefault("agents", {})
+        agents[agent.id] = {
+            "name": agent.name,
+            "provider": agent.provider,
+            "model": agent.model or "",
+            "working_directory": str(agent.workspace),
+            "system_prompt": agent.system_prompt or agent.role,
+            "heartbeat": {"enabled": agent.heartbeat_enabled, "interval": agent.heartbeat_interval},
+        }
+        self._write_settings_file(data)
+
+    def _remove_agent_settings(self, agent_id: str) -> None:
+        data = self._read_settings_file()
+        agents = data.get("agents")
+        if isinstance(agents, dict) and agent_id in agents:
+            agents.pop(agent_id, None)
+            self._write_settings_file(data)
 
     @staticmethod
     def _to_agent(row) -> Agent:

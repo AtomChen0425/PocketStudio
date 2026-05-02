@@ -1,9 +1,15 @@
 import uuid
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from pocketStudio.core.config import Settings
+from pocketStudio.core.database import Database
 from pocketStudio.core.dependencies import get_database
 from pocketStudio.main import app
+from pocketStudio.models import MessageCreate
+from pocketStudio.services.event_service import EventService
+from pocketStudio.services.queue_service import QueueService
 
 
 def test_dead_letter_retry_delete_and_agent_status() -> None:
@@ -17,7 +23,7 @@ def test_dead_letter_retry_delete_and_agent_status() -> None:
         message_id = message_response.json()["id"]
 
         for _ in range(6):
-            client.post("/api/worker/tick")
+            client.post(f"/api/messages/{message_id}/process")
 
         dead_response = client.get("/api/queue/dead")
         assert dead_response.status_code == 200
@@ -33,7 +39,7 @@ def test_dead_letter_retry_delete_and_agent_status() -> None:
         assert client.get(f"/api/queue/{message_id}").json()["status"] == "queued"
 
         for _ in range(6):
-            client.post("/api/worker/tick")
+            client.post(f"/api/messages/{message_id}/process")
 
         delete_response = client.delete(f"/api/queue/dead/{message_id}")
         assert delete_response.status_code == 200
@@ -41,28 +47,19 @@ def test_dead_letter_retry_delete_and_agent_status() -> None:
 
 
 def test_recover_stale_running_message() -> None:
-    with TestClient(app) as client:
-        client.post("/api/worker/stop")
-        agent_id = f"stale-agent-{uuid.uuid4().hex[:8]}"
-        client.post("/api/agents", json={"id": agent_id, "name": "Stale Agent", "role": "Recovers", "provider": "local"})
-        message_response = client.post(
-            "/api/messages",
-            json={"target": f"@agent:{agent_id}", "content": "recover me", "sender": "test"},
-        )
-        message_id = message_response.json()["id"]
-        db = get_database()
-        db.execute(
-            """
-            UPDATE messages
-            SET status = 'running', attempts = 1, updated_at = datetime('now', '-20 minutes')
-            WHERE id = ?
-            """,
-            (message_id,),
-        )
+    settings = Settings(pocketStudio_home=Path(".pytest-local") / f"stale-home-{uuid.uuid4().hex[:8]}")
+    db = Database(settings.database_path)
+    db.initialize()
+    queue = QueueService(db, EventService(db, settings), settings)
+    message = queue.enqueue(MessageCreate(target="@agent:stale", content="recover me", sender="test"))
+    db.execute(
+        """
+        UPDATE messages
+        SET status = 'running', attempts = 1, updated_at = datetime('now', '-20 minutes')
+        WHERE id = ?
+        """,
+        (message.id,),
+    )
 
-        recover_response = client.post("/api/queue/recover-stale?threshold_seconds=1")
-
-        assert recover_response.status_code == 200
-        assert recover_response.json()["recovered"] >= 1
-        assert client.get(f"/api/queue/{message_id}").json()["status"] == "failed"
-
+    assert queue.recover_stale_messages(threshold_seconds=1) == 1
+    assert queue.get(message.id).status == "failed"

@@ -7,23 +7,47 @@ from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
 from pocketStudio.models import AgentMessage, MessageCreate, MessageStatus, QueueMessage, QueueStatus, ResponseJob
 from pocketStudio.services.event_service import EventService
+from pocketStudio.services.plugin_service import PluginService
+from pocketStudio.services.response_service import ResponseService
 
 
 class QueueService:
-    def __init__(self, db: Database, events: EventService, settings: Settings) -> None:
+    def __init__(
+        self,
+        db: Database,
+        events: EventService,
+        settings: Settings,
+        responses: ResponseService | None = None,
+        plugins: PluginService | None = None,
+    ) -> None:
         self.db = db
         self.events = events
         self.settings = settings
+        self.responses = responses or ResponseService(settings)
+        self.plugins = plugins
 
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
+        content = payload.content
+        if self.plugins:
+            hooked = self.plugins.run_incoming_hooks(
+                content,
+                {"channel": payload.metadata.get("channel", "web"), "sender": payload.sender, "target": payload.target},
+            )
+            content = hooked.text
         cursor = self.db.execute(
-            "INSERT INTO messages (target, content, sender) VALUES (?, ?, ?)",
-            (payload.target, payload.content, payload.sender),
+            "INSERT INTO messages (target, content, sender, metadata) VALUES (?, ?, ?, ?)",
+            (payload.target, content, payload.sender, json.dumps(payload.metadata)),
         )
         message = self.get(cursor.lastrowid)
         self.events.emit(
             "message.queued",
-            {"message_id": message.id, "target": message.target, "content": message.content, "sender": message.sender},
+            {
+                "message_id": message.id,
+                "target": message.target,
+                "content": message.content,
+                "sender": message.sender,
+                "metadata": message.metadata,
+            },
         )
         return message
 
@@ -213,6 +237,17 @@ class QueueService:
         )
         return [self._to_agent_message(row) for row in reversed(rows)]
 
+    def reset_agent(self, agent_id: str) -> dict:
+        message_rows = self.db.fetch_all("SELECT id FROM agent_messages WHERE agent_id = ?", (agent_id,))
+        response_rows = self.db.fetch_all("SELECT id FROM responses WHERE agent = ?", (agent_id,))
+        self.db.execute("DELETE FROM agent_messages WHERE agent_id = ?", (agent_id,))
+        self.db.execute("DELETE FROM responses WHERE agent = ?", (agent_id,))
+        self.events.emit(
+            "agent.reset",
+            {"agent_id": agent_id, "messages": len(message_rows), "responses": len(response_rows)},
+        )
+        return {"messages": len(message_rows), "responses": len(response_rows)}
+
     def recent_responses(self, limit: int = 20) -> list[dict]:
         rows = self.db.fetch_all("SELECT * FROM responses ORDER BY created_at DESC LIMIT ?", (limit,))
         return [self._response_api_payload(self._to_response(row)) for row in rows]
@@ -305,15 +340,27 @@ class QueueService:
             runs = [{"agent_id": "orchestrator", "output": message.result}]
         responses = []
         for index, run in enumerate(runs):
+            prepared = self.responses.prepare(
+                run.get("output", ""),
+                context={
+                    "channel": "web",
+                    "sender": message.sender,
+                    "messageId": f"{message.id}-{index}",
+                    "originalMessage": message.content,
+                    "agentId": run.get("agent_id"),
+                },
+            )
+            metadata = {"queue_message_id": message.id, **prepared.metadata}
             responses.append(
                 self.enqueue_response(
                     message_id=f"{message.id}-{index}",
                     channel="web",
                     sender=message.sender,
-                    message=run.get("output", ""),
+                    message=prepared.message,
                     original_message=message.content,
                     agent=run.get("agent_id"),
-                    metadata={"queue_message_id": message.id},
+                    files=prepared.files,
+                    metadata=metadata,
                 )
             )
         return responses
@@ -337,6 +384,7 @@ class QueueService:
             target=row["target"],
             content=row["content"],
             sender=row["sender"],
+            metadata=json.loads(row["metadata"] or "{}"),
             status=row["status"],
             attempts=row["attempts"],
             error=row["error"],

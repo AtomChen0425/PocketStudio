@@ -24,8 +24,24 @@ class Settings(BaseSettings):
         return self.pocketStudio_home / "pocketStudio.db"
 
     @property
+    def settings_path(self) -> Path:
+        return self.pocketStudio_home / "settings.json"
+
+    @property
     def workspace_path(self) -> Path:
         return self.pocketStudio_home / "workspace"
+
+    @property
+    def files_path(self) -> Path:
+        return self.pocketStudio_home / "files"
+
+    @property
+    def logs_path(self) -> Path:
+        return self.pocketStudio_home / "logs"
+
+    @property
+    def log_file_path(self) -> Path:
+        return self.logs_path / "pocketstudio.log"
 
 
 @lru_cache

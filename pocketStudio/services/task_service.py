@@ -11,19 +11,22 @@ class TaskService:
         self.events = events
 
     def create(self, payload: TaskCreate) -> Task:
+        number = self._next_number(payload.project_id)
+        position = payload.position if payload.position else self._next_position(payload.status)
         cursor = self.db.execute(
             """
-            INSERT INTO tasks (title, description, status, assignee, assignee_type, project_id, position)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (number, title, description, status, assignee, assignee_type, project_id, position)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                number,
                 payload.title,
                 payload.description,
                 payload.status,
                 payload.assignee,
                 payload.assignee_type,
                 payload.project_id,
-                payload.position,
+                position,
             ),
         )
         task = self.get(cursor.lastrowid)
@@ -31,24 +34,42 @@ class TaskService:
         return task
 
     def get(self, task_id: int) -> Task:
-        row = self.db.fetch_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        row = self.db.fetch_one(
+            """
+            SELECT tasks.*, projects.prefix AS project_prefix
+            FROM tasks
+            LEFT JOIN projects ON tasks.project_id = projects.id
+            WHERE tasks.id = ?
+            """,
+            (task_id,),
+        )
         if row is None:
             raise KeyError(f"Task '{task_id}' not found")
         return self._to_task(row)
 
     def list(self) -> list[Task]:
-        rows = self.db.fetch_all("SELECT * FROM tasks ORDER BY id DESC")
+        rows = self.db.fetch_all(
+            """
+            SELECT tasks.*, projects.prefix AS project_prefix
+            FROM tasks
+            LEFT JOIN projects ON tasks.project_id = projects.id
+            ORDER BY tasks.status ASC, tasks.position ASC, tasks.id ASC
+            """
+        )
         return [self._to_task(row) for row in rows]
 
     def update(self, task_id: int, payload: TaskCreate) -> Task:
+        current = self.get(task_id)
+        number = current.number if payload.project_id == current.project_id else self._next_number(payload.project_id)
         self.db.execute(
             """
             UPDATE tasks
-            SET title = ?, description = ?, status = ?, assignee = ?,
+            SET number = ?, title = ?, description = ?, status = ?, assignee = ?,
                 assignee_type = ?, project_id = ?, position = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
             (
+                number,
                 payload.title,
                 payload.description,
                 payload.status,
@@ -72,14 +93,39 @@ class TaskService:
         self.events.emit("task.updated", {"task_id": task.id, "status": task.status})
         return task
 
+    def reorder(self, columns: dict[str, list[str]]) -> int:
+        updated = 0
+        for status, task_ids in columns.items():
+            for position, raw_task_id in enumerate(task_ids):
+                try:
+                    task_id = int(raw_task_id)
+                except (TypeError, ValueError):
+                    continue
+                self.db.execute(
+                    """
+                    UPDATE tasks
+                    SET status = ?, position = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (status, position, task_id),
+                )
+                updated += 1
+        if updated:
+            self.events.emit("tasks.reordered", {"count": updated})
+        return updated
+
     def delete(self, task_id: int) -> None:
         self.db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         self.events.emit("task.deleted", {"task_id": task_id})
 
     @staticmethod
     def _to_task(row) -> Task:
+        number = row["number"] or row["id"]
+        prefix = row["project_prefix"] if "project_prefix" in row.keys() else None
         return Task(
             id=row["id"],
+            number=number,
+            identifier=f"{prefix or 'T'}-{number}",
             title=row["title"],
             description=row["description"],
             status=row["status"],
@@ -90,3 +136,20 @@ class TaskService:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    def _next_number(self, project_id: str | None) -> int:
+        if project_id:
+            row = self.db.fetch_one(
+                "SELECT COALESCE(MAX(number), 0) + 1 AS next_number FROM tasks WHERE project_id = ?",
+                (project_id,),
+            )
+        else:
+            row = self.db.fetch_one("SELECT COALESCE(MAX(number), 0) + 1 AS next_number FROM tasks WHERE project_id IS NULL")
+        return int(row["next_number"]) if row else 1
+
+    def _next_position(self, status: str) -> int:
+        row = self.db.fetch_one(
+            "SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM tasks WHERE status = ?",
+            (status,),
+        )
+        return int(row["next_position"]) if row else 0

@@ -4,3 +4,4 @@
 /.upstream-tinyagi
 /.pocketStudio
 __pycache__/
+/.pytest-local

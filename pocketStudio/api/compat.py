@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,18 +9,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pocketStudio.api.errors import not_found
 from pocketStudio.core.dependencies import (
     get_agent_service,
+    get_channel_service,
+    get_chat_service,
     get_database,
+    get_event_service,
     get_heartbeat_service,
     get_orchestrator,
+    get_plugin_service,
     get_project_service,
     get_queue_service,
     get_schedule_service,
+    get_settings_service,
     get_task_service,
     get_team_service,
     get_worker_service,
     get_provider_registry,
 )
 from pocketStudio.core.database import Database
+from pocketStudio.core.runtime import uptime_seconds
 from pocketStudio.models import (
     AgentCreate,
     MessageCreate,
@@ -30,17 +37,34 @@ from pocketStudio.models import (
     TeamCreate,
 )
 from pocketStudio.services.agent_service import AgentService
+from pocketStudio.services.channel_service import ChannelService
+from pocketStudio.services.chat_service import ChatService
+from pocketStudio.services.event_service import EventService
 from pocketStudio.services.heartbeat_service import HeartbeatService
 from pocketStudio.services.orchestrator import Orchestrator
 from pocketStudio.services.project_service import ProjectService
+from pocketStudio.services.plugin_service import PluginService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.schedule_service import ScheduleService
+from pocketStudio.services.settings_service import SettingsService
 from pocketStudio.services.task_service import TaskService
 from pocketStudio.services.team_service import TeamService
 from pocketStudio.services.worker_service import WorkerService
 from pocketStudio.providers.registry import ProviderRegistry
 
 router = APIRouter(tags=["tinyagi-compat"])
+
+
+def _millis(value: str | int | float | None) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    if not value:
+        return int(time.time() * 1000)
+    parsed = value.replace("Z", "+00:00")
+    try:
+        return int(datetime.fromisoformat(parsed).timestamp() * 1000)
+    except ValueError:
+        return int(time.time() * 1000)
 
 
 def _agent_config(agent) -> dict:
@@ -58,29 +82,31 @@ def _team_config(team) -> dict:
     return {
         "name": team.name,
         "agents": team.agent_ids,
-        "leader_agent": team.agent_ids[0] if team.agent_ids else "",
+        "leader_agent": team.leader_agent or (team.agent_ids[0] if team.agent_ids else ""),
+        "max_rounds": team.max_rounds,
+        "stop_when_idle": team.stop_when_idle,
     }
 
 
 def _task_payload(task, comment_count: int = 0) -> dict:
     return {
         "id": str(task.id),
-        "number": task.id,
-        "identifier": f"PS-{task.id}",
+        "number": task.number,
+        "identifier": task.identifier,
         "title": task.title,
         "description": task.description,
         "status": task.status,
         "assignee": task.assignee or "",
         "assigneeType": task.assignee_type or ("agent" if task.assignee else ""),
         "projectId": task.project_id,
-        "createdAt": int(time.time() * 1000),
-        "updatedAt": int(time.time() * 1000),
+        "sortOrder": task.position,
+        "createdAt": _millis(task.created_at),
+        "updatedAt": _millis(task.updated_at),
         "commentCount": comment_count,
     }
 
 
 def _project_payload(project) -> dict:
-    now = int(time.time() * 1000)
     return {
         "id": project.id,
         "name": project.name,
@@ -88,8 +114,8 @@ def _project_payload(project) -> dict:
         "prefix": project.prefix,
         "color": project.color,
         "status": project.status,
-        "createdAt": now,
-        "updatedAt": now,
+        "createdAt": _millis(project.created_at),
+        "updatedAt": _millis(project.updated_at),
     }
 
 
@@ -143,25 +169,37 @@ def _save_custom_provider_row(provider_id: str, payload: dict[str, Any], db: Dat
     )
 
 
+def _target_agent_id(target: str) -> str:
+    if target.startswith("@agent:"):
+        return target.split(":", 1)[1]
+    if target.startswith("@"):
+        return target[1:]
+    return target
+
+
 @router.get("/settings")
 def get_settings_snapshot(
     agents: AgentService = Depends(get_agent_service),
     teams: TeamService = Depends(get_team_service),
     db: Database = Depends(get_database),
+    settings_service: SettingsService = Depends(get_settings_service),
 ) -> dict:
     custom_providers = _custom_providers(db)
-    return {
-        "workspace": {"name": "pocketStudio", "path": ".pocketStudio/workspace"},
-        "channels": {"enabled": ["web"]},
-        "models": {
-            "provider": "local",
-            "openai": {"model": "gpt-4o-mini"},
-            "custom_providers": custom_providers,
-        },
-        "agents": {agent.id: _agent_config(agent) for agent in agents.list()},
-        "teams": {team.id: _team_config(team) for team in teams.list()},
-        "monitoring": {"heartbeat_interval": 3600},
-    }
+    settings = settings_service.snapshot()
+    settings["models"] = {**settings.get("models", {}), "custom_providers": custom_providers}
+    settings["agents"] = {agent.id: _agent_config(agent) for agent in agents.list()}
+    settings["teams"] = {team.id: _team_config(team) for team in teams.list()}
+    return settings
+
+
+@router.get("/settings/export")
+def export_settings_snapshot(
+    agents: AgentService = Depends(get_agent_service),
+    teams: TeamService = Depends(get_team_service),
+    db: Database = Depends(get_database),
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> dict:
+    return {"ok": True, "settings": get_settings_snapshot(agents, teams, db, settings_service)}
 
 
 @router.put("/settings")
@@ -171,7 +209,9 @@ def update_settings_snapshot(
     teams: TeamService = Depends(get_team_service),
     db: Database = Depends(get_database),
     registry: ProviderRegistry = Depends(get_provider_registry),
+    settings_service: SettingsService = Depends(get_settings_service),
 ) -> dict:
+    settings_service.update(payload)
     for provider_id, provider in (payload.get("models") or {}).get("custom_providers", {}).items():
         _save_custom_provider_row(provider_id, provider, db)
     for agent_id, config in (payload.get("agents") or {}).items():
@@ -195,31 +235,71 @@ def update_settings_snapshot(
                 name=config.get("name") or team_id,
                 mode="chain",
                 agent_ids=config.get("agents") or [],
+                leader_agent=config.get("leader_agent") or "",
+                max_rounds=config.get("max_rounds") or config.get("maxRounds") or 1,
+                stop_when_idle=config.get("stop_when_idle", config.get("stopWhenIdle", True)),
             )
         )
     registry.reload_custom()
-    return {"ok": True, "settings": get_settings_snapshot(agents, teams, db)}
+    return {"ok": True, "settings": get_settings_snapshot(agents, teams, db, settings_service)}
+
+
+@router.post("/settings/import")
+def import_settings_snapshot(
+    payload: dict[str, Any],
+    agents: AgentService = Depends(get_agent_service),
+    teams: TeamService = Depends(get_team_service),
+    db: Database = Depends(get_database),
+    registry: ProviderRegistry = Depends(get_provider_registry),
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> dict:
+    settings_payload = payload.get("settings") if "settings" in payload else payload
+    return update_settings_snapshot(settings_payload, agents, teams, db, registry, settings_service)
 
 
 @router.post("/setup")
-def run_setup(payload: dict[str, Any]) -> dict:
-    return {"ok": True, "settings": payload}
+def run_setup(
+    payload: dict[str, Any],
+    agents: AgentService = Depends(get_agent_service),
+    teams: TeamService = Depends(get_team_service),
+    db: Database = Depends(get_database),
+    registry: ProviderRegistry = Depends(get_provider_registry),
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> dict:
+    result = update_settings_snapshot(payload, agents, teams, db, registry, settings_service)["settings"]
+    settings_service.ensure_setup_dirs(result)
+    return {"ok": True, "settings": result}
 
 
 @router.post("/message")
-def enqueue_legacy_message(payload: dict[str, Any], orchestrator: Orchestrator = Depends(get_orchestrator)) -> dict:
+def enqueue_legacy_message(
+    payload: dict[str, Any],
+    orchestrator: Orchestrator = Depends(get_orchestrator),
+    channels: ChannelService = Depends(get_channel_service),
+) -> dict:
     text = payload.get("message") or ""
+    channel = payload.get("channel") or "web"
+    sender = payload.get("sender") or "api"
+    sender_id = payload.get("senderId") or payload.get("sender_id") or sender
+    if channel != "web" and sender_id:
+        pairing = channels.ensure_sender_paired(channel, sender_id, sender)
+        if not pairing.approved:
+            return {
+                "ok": False,
+                "pairingRequired": True,
+                "code": pairing.code,
+                "isNewPending": pairing.is_new_pending,
+                "message": f"Pair this sender with code {pairing.code}",
+            }
     agent = payload.get("agent")
-    target = f"@agent:{agent}" if agent else "@agent:pocketstudio"
-    if text.startswith("@team:"):
-        target, _, text = text.partition(" ")
-    elif text.startswith("@"):
-        mention, _, text = text.partition(" ")
-        target = f"@agent:{mention[1:]}"
-    message = orchestrator.enqueue(
-        MessageCreate(target=target, content=text.strip() or payload.get("message", ""), sender=payload.get("sender") or "api")
-    )
-    return {"ok": True, "messageId": str(message.id)}
+    routed = channels.route_message(channel, sender_id, text, explicit_agent=agent)
+    if routed.target is None:
+        return {"ok": True, "messageId": None, "switchNotification": routed.switch_notification}
+    message = orchestrator.enqueue(MessageCreate(target=routed.target, content=routed.content or text, sender=sender))
+    response = {"ok": True, "messageId": str(message.id)}
+    if routed.switch_notification:
+        response["switchNotification"] = routed.switch_notification
+    return response
 
 
 @router.get("/queue/status")
@@ -259,7 +339,10 @@ def queue_recover_stale(
 
 
 @router.get("/queue/processing")
-def queue_processing(queue: QueueService = Depends(get_queue_service)) -> list[dict]:
+def queue_processing(
+    queue: QueueService = Depends(get_queue_service),
+    registry: ProviderRegistry = Depends(get_provider_registry),
+) -> list[dict]:
     items = queue.list(limit=100, status=MessageStatus.running)
     now = int(time.time() * 1000)
     return [
@@ -271,7 +354,7 @@ def queue_processing(queue: QueueService = Depends(get_queue_service)) -> list[d
             "message": item.content,
             "agent": item.target,
             "status": "processing",
-            "processAlive": True,
+            "processAlive": registry.agent_process_alive(_target_agent_id(item.target)),
             "startedAt": now,
             "duration": 0,
         }
@@ -280,8 +363,20 @@ def queue_processing(queue: QueueService = Depends(get_queue_service)) -> list[d
 
 
 @router.post("/queue/processing/{message_id}/kill")
-def kill_processing(message_id: int) -> dict:
-    return {"ok": True, "agent": str(message_id), "processKilled": False}
+async def kill_processing(
+    message_id: int,
+    queue: QueueService = Depends(get_queue_service),
+    registry: ProviderRegistry = Depends(get_provider_registry),
+) -> dict:
+    try:
+        message = queue.get(message_id)
+    except KeyError:
+        return {"ok": False, "agent": str(message_id), "processKilled": False}
+    agent_id = _target_agent_id(message.target)
+    killed = await registry.kill_agent(agent_id)
+    if killed:
+        queue.mark_failed(message_id, "Killed by user")
+    return {"ok": True, "agent": agent_id, "processKilled": killed}
 
 
 @router.get("/responses")
@@ -316,9 +411,26 @@ def prune_completed_messages(
 
 
 @router.get("/logs")
-def logs(limit: int = Query(default=100, ge=1, le=500), db: Database = Depends(get_database)) -> dict:
-    rows = db.fetch_all("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
-    return {"lines": [f"{row['created_at']} {row['type']} {row['payload']}" for row in rows]}
+def logs(limit: int = Query(default=100, ge=1, le=500), events: EventService = Depends(get_event_service)) -> dict:
+    return {"lines": events.log_lines(limit)}
+
+
+@router.get("/chats")
+def list_chats(chat: ChatService = Depends(get_chat_service)) -> list[dict]:
+    return chat.archives()
+
+
+@router.get("/chats/{team_id}")
+def read_chat_archive(
+    team_id: str,
+    limit: int = Query(default=500, ge=1, le=2000),
+    chat: ChatService = Depends(get_chat_service),
+) -> dict:
+    messages = chat.list(team_id=team_id, limit=limit)
+    return {
+        "teamId": team_id,
+        "messages": [message.model_dump() for message in messages],
+    }
 
 
 @router.get("/agents/{agent_id}/messages")
@@ -329,6 +441,29 @@ def agent_messages(
     queue: QueueService = Depends(get_queue_service),
 ) -> list[dict]:
     return [message.model_dump() for message in queue.get_agent_messages(agent_id, limit, since_id)]
+
+
+@router.post("/agents/{agent_id}/reset")
+def reset_agent_runtime(
+    agent_id: str,
+    agents: AgentService = Depends(get_agent_service),
+    queue: QueueService = Depends(get_queue_service),
+) -> dict:
+    try:
+        agents.get(agent_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    return {"ok": True, "agentId": agent_id, "cleared": queue.reset_agent(agent_id)}
+
+
+@router.get("/plugins")
+def list_plugins(plugins: PluginService = Depends(get_plugin_service)) -> dict:
+    return {"plugins": plugins.list_plugins()}
+
+
+@router.post("/plugins/reload")
+def reload_plugins(plugins: PluginService = Depends(get_plugin_service)) -> dict:
+    return {"ok": True, "plugins": plugins.list_plugins(reload=True)}
 
 
 @router.get("/agents/{agent_id}/system-prompt")
@@ -411,8 +546,11 @@ def install_agent_skill(agent_id: str, payload: dict[str, str], agents: AgentSer
 
 
 @router.get("/projects")
-def list_projects(projects: ProjectService = Depends(get_project_service)) -> list[dict]:
-    return [_project_payload(project) for project in projects.list_projects()]
+def list_projects(status: str | None = None, projects: ProjectService = Depends(get_project_service)) -> list[dict]:
+    all_projects = projects.list_projects()
+    if status:
+        all_projects = [project for project in all_projects if project.status == status]
+    return [_project_payload(project) for project in all_projects]
 
 
 @router.post("/projects")
@@ -420,10 +558,21 @@ def create_project(payload: ProjectCreate, projects: ProjectService = Depends(ge
     return {"ok": True, "project": _project_payload(projects.create_project(payload))}
 
 
-@router.put("/projects/{project_id}")
-def update_project(project_id: str, payload: ProjectCreate, projects: ProjectService = Depends(get_project_service)) -> dict:
+@router.get("/projects/{project_id}")
+def get_project(project_id: str, projects: ProjectService = Depends(get_project_service)) -> dict:
     try:
-        return {"ok": True, "project": _project_payload(projects.update_project(project_id, payload))}
+        return _project_payload(projects.get_project(project_id))
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.put("/projects/{project_id}")
+def update_project(project_id: str, payload: dict[str, Any], projects: ProjectService = Depends(get_project_service)) -> dict:
+    try:
+        current = projects.get_project(project_id)
+        merged = current.model_dump()
+        merged.update(payload)
+        return {"ok": True, "project": _project_payload(projects.update_project(project_id, ProjectCreate(**merged)))}
     except KeyError as exc:
         raise not_found(exc) from exc
 
@@ -435,8 +584,12 @@ def delete_project(project_id: str, projects: ProjectService = Depends(get_proje
 
 
 @router.put("/tasks/reorder")
-def reorder_tasks(payload: dict[str, Any]) -> dict:
-    return {"ok": True}
+def reorder_tasks(payload: dict[str, Any], tasks: TaskService = Depends(get_task_service)) -> dict:
+    columns = payload.get("columns") if "columns" in payload else payload
+    if not isinstance(columns, dict):
+        return {"ok": False, "updated": 0}
+    updated = tasks.reorder({str(status): [str(task_id) for task_id in task_ids] for status, task_ids in columns.items()})
+    return {"ok": True, "updated": updated}
 
 
 @router.get("/tasks/{task_id}/comments")
@@ -541,12 +694,17 @@ def delete_schedule(schedule_id: str, schedules: ScheduleService = Depends(get_s
 def system_status(
     worker: WorkerService = Depends(get_worker_service),
     heartbeat: HeartbeatService = Depends(get_heartbeat_service),
+    settings_service: SettingsService = Depends(get_settings_service),
 ) -> dict:
+    enabled_channels = (settings_service.snapshot().get("channels") or {}).get("enabled") or ["web"]
     return {
         "ok": True,
-        "uptime": 0,
+        "uptime": uptime_seconds(),
         "server": {"running": True, "port": 3777},
-        "channels": {"web": {"running": True}},
+        "channels": {
+            channel: {"running": channel == "web", "managed": channel == "web"}
+            for channel in enabled_channels
+        },
         "heartbeat": heartbeat.snapshot(),
         "worker": worker.snapshot(),
     }
@@ -563,7 +721,7 @@ def worker_status(worker: WorkerService = Depends(get_worker_service)) -> dict:
 
 
 @router.post("/worker/start")
-def worker_start(worker: WorkerService = Depends(get_worker_service)) -> dict:
+async def worker_start(worker: WorkerService = Depends(get_worker_service)) -> dict:
     started = worker.start()
     return {"ok": True, "started": started, "worker": worker.snapshot()}
 
@@ -586,9 +744,20 @@ async def worker_tick(worker: WorkerService = Depends(get_worker_service)) -> di
     return {"ok": True, "processed": processed, "worker": worker.snapshot()}
 
 @router.post("/services/apply")
-def apply_services(worker: WorkerService = Depends(get_worker_service)) -> dict:
+async def apply_services(
+    worker: WorkerService = Depends(get_worker_service),
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> dict:
     worker.start()
-    return {"ok": True, "started": ["web", "worker"], "heartbeat": True}
+    enabled_channels = (settings_service.snapshot().get("channels") or {}).get("enabled") or ["web"]
+    started = ["worker"]
+    errors = []
+    for channel in enabled_channels:
+        if channel == "web":
+            started.append("web")
+        else:
+            errors.append(f"{channel}: channel process manager is not implemented")
+    return {"ok": True, "started": started, "heartbeat": True, "errors": errors or None}
 
 
 @router.post("/services/restart")
@@ -599,75 +768,31 @@ async def restart_service(worker: WorkerService = Depends(get_worker_service)) -
 
 @router.post("/services/channel/{channel_id}/{action}")
 def channel_action(channel_id: str, action: str) -> dict:
-    return {"ok": True, "channel": channel_id, "action": action}
+    if channel_id == "web" and action in {"start", "restart"}:
+        return {"ok": True, "channel": channel_id, "action": "started"}
+    if channel_id == "web" and action == "stop":
+        return {"ok": False, "channel": channel_id, "error": "web channel is built into the API server"}
+    return {"ok": False, "channel": channel_id, "error": "channel process manager is not implemented"}
 
 
 @router.get("/pairing")
-def get_pairings(db: Database = Depends(get_database)) -> dict:
-    pending = db.fetch_all("SELECT * FROM pairing_pending ORDER BY created_at DESC")
-    approved = db.fetch_all("SELECT * FROM pairing_approved ORDER BY approved_at DESC")
-    return {
-        "pending": [
-            {
-                "channel": row["channel"],
-                "senderId": row["sender_id"],
-                "sender": row["sender"],
-                "code": row["code"],
-                "createdAt": row["created_at"],
-                "lastSeenAt": row["last_seen_at"],
-            }
-            for row in pending
-        ],
-        "approved": [
-            {
-                "channel": row["channel"],
-                "senderId": row["sender_id"],
-                "sender": row["sender"],
-                "approvedAt": row["approved_at"],
-                "approvedCode": row["approved_code"],
-            }
-            for row in approved
-        ],
-    }
+def get_pairings(channels: ChannelService = Depends(get_channel_service)) -> dict:
+    return channels.pairing_state()
 
 
 @router.post("/pairing/approve")
-def approve_pairing(payload: dict[str, str], db: Database = Depends(get_database)) -> dict:
-    code = payload.get("code")
-    row = db.fetch_one("SELECT * FROM pairing_pending WHERE code = ?", (code,))
-    if row is None:
-        return {"ok": False}
-    now = int(time.time() * 1000)
-    db.execute(
-        """
-        INSERT OR REPLACE INTO pairing_approved (channel, sender_id, sender, approved_at, approved_code)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (row["channel"], row["sender_id"], row["sender"], now, code),
-    )
-    db.execute("DELETE FROM pairing_pending WHERE code = ?", (code,))
-    return {
-        "ok": True,
-        "entry": {
-            "channel": row["channel"],
-            "senderId": row["sender_id"],
-            "sender": row["sender"],
-            "approvedAt": now,
-            "approvedCode": code,
-        },
-    }
+def approve_pairing(payload: dict[str, str], channels: ChannelService = Depends(get_channel_service)) -> dict:
+    return channels.approve(payload.get("code"))
 
 
 @router.delete("/pairing/{channel}/{sender_id}")
-def revoke_pairing(channel: str, sender_id: str, db: Database = Depends(get_database)) -> dict:
-    db.execute("DELETE FROM pairing_approved WHERE channel = ? AND sender_id = ?", (channel, sender_id))
-    return {"ok": True}
+def revoke_pairing(channel: str, sender_id: str, channels: ChannelService = Depends(get_channel_service)) -> dict:
+    return {"ok": channels.revoke(channel, sender_id)}
 
 
 @router.delete("/pairing/pending/{code}")
-def dismiss_pairing(code: str, db: Database = Depends(get_database)) -> dict:
-    db.execute("DELETE FROM pairing_pending WHERE code = ?", (code,))
-    return {"ok": True}
+def dismiss_pairing(code: str, channels: ChannelService = Depends(get_channel_service)) -> dict:
+    return {"ok": channels.dismiss_pending(code)}
 
 
 @router.get("/custom-providers")

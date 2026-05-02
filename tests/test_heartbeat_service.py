@@ -61,3 +61,24 @@ def test_agent_heartbeat_api_updates_runtime_config() -> None:
 
         settings = client.get("/api/settings").json()
         assert settings["agents"][agent_id]["heartbeat"] == {"enabled": True, "interval": 15}
+
+
+def test_new_agent_gets_default_heartbeat_interval_from_monitoring_settings() -> None:
+    from fastapi.testclient import TestClient
+
+    from pocketStudio.main import app
+
+    agent_id = f"heartbeat-default-{uuid.uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        client.put("/api/settings", json={"monitoring": {"heartbeat_interval": 77}})
+        created = client.post(
+            "/api/agents",
+            json={"id": agent_id, "name": "Default Heartbeat", "role": "Checks defaults", "provider": "local"},
+        )
+
+        assert created.status_code == 200
+        assert created.json()["heartbeat_interval"] == 77
+        heartbeat = client.get(f"/api/agents/{agent_id}/heartbeat")
+        assert heartbeat.json()["interval"] == 77
+        settings = client.get("/api/settings").json()
+        assert settings["agents"][agent_id]["heartbeat"] == {"enabled": True, "interval": 77}

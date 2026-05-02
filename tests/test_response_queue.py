@@ -1,9 +1,12 @@
 import uuid
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from pocketStudio.core.config import Settings
 from pocketStudio.core.dependencies import get_database
 from pocketStudio.main import app
+from pocketStudio.services.response_service import LONG_RESPONSE_THRESHOLD, ResponseService
 
 
 def test_response_queue_channel_ack_and_prune() -> None:
@@ -60,3 +63,20 @@ def test_prune_completed_messages() -> None:
         assert prune_response.json()["pruned"] >= 1
         assert client.get(f"/api/queue/{message_id}").status_code == 404
 
+
+def test_response_service_collects_files_and_saves_long_responses() -> None:
+    home = Path(".pytest-local") / f"response-home-{uuid.uuid4().hex[:8]}"
+    attachment = home / "attachment.txt"
+    attachment.parent.mkdir(parents=True, exist_ok=True)
+    attachment.write_text("attachment", encoding="utf-8")
+    service = ResponseService(Settings(pocketStudio_home=home))
+
+    prepared = service.prepare(f"hello [send_file: {attachment}] " + ("x" * (LONG_RESPONSE_THRESHOLD + 20)))
+
+    assert "[send_file:" not in prepared.message
+    assert prepared.metadata["truncated"] is True
+    assert prepared.metadata["responseLength"] > LONG_RESPONSE_THRESHOLD
+    assert str(attachment) in prepared.files
+    full_response = prepared.metadata["fullResponseFile"]
+    assert full_response in prepared.files
+    assert Path(full_response).read_text(encoding="utf-8").startswith("hello")

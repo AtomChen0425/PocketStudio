@@ -41,6 +41,11 @@ class TeamCreate(BaseModel):
     name: str
     mode: TeamMode = TeamMode.chain
     agent_ids: list[str] = Field(default_factory=list)
+    leader_agent: str = Field(default="", alias="leaderAgent")
+    max_rounds: int = Field(default=1, ge=1, le=20, alias="maxRounds")
+    stop_when_idle: bool = Field(default=True, alias="stopWhenIdle")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class Team(TeamCreate):
@@ -51,6 +56,7 @@ class MessageCreate(BaseModel):
     target: str = Field(description="@agent:id, @team:id, or a bare agent/team id")
     content: str
     sender: str = "api"
+    metadata: dict = Field(default_factory=dict)
 
 
 class QueueMessage(BaseModel):
@@ -58,6 +64,7 @@ class QueueMessage(BaseModel):
     target: str
     content: str
     sender: str
+    metadata: dict = Field(default_factory=dict)
     status: MessageStatus
     attempts: int
     error: str | None = None
@@ -106,6 +113,8 @@ class TaskCreate(BaseModel):
 
 class Task(TaskCreate):
     id: int
+    number: int = 0
+    identifier: str = ""
     created_at: str
     updated_at: str
 
@@ -113,8 +122,8 @@ class Task(TaskCreate):
 class ProjectCreate(BaseModel):
     name: str
     description: str = ""
-    prefix: str = "PS"
-    color: str = "#84cc16"
+    prefix: str = ""
+    color: str = ""
     status: str = "active"
 
 

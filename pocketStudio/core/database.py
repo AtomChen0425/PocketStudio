@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS teams (
     name TEXT NOT NULL,
     mode TEXT NOT NULL CHECK (mode IN ('chain', 'fanout')),
     agent_ids TEXT NOT NULL,
+    leader_agent TEXT NOT NULL DEFAULT '',
+    max_rounds INTEGER NOT NULL DEFAULT 1,
+    stop_when_idle INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -38,6 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
     target TEXT NOT NULL,
     content TEXT NOT NULL,
     sender TEXT NOT NULL DEFAULT 'api',
+    metadata TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'queued',
     attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT,
@@ -56,6 +60,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    number INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'todo',
@@ -149,6 +154,14 @@ CREATE TABLE IF NOT EXISTS pairing_approved (
     PRIMARY KEY(channel, sender_id)
 );
 
+CREATE TABLE IF NOT EXISTS channel_defaults (
+    channel TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    target TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(channel, sender_id)
+);
+
 CREATE TABLE IF NOT EXISTS custom_providers (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -163,6 +176,12 @@ CREATE TABLE IF NOT EXISTS heartbeat_state (
     last_sent_at INTEGER NOT NULL,
     last_message_id INTEGER,
     FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -205,6 +224,8 @@ class Database:
                 self._migrate(conn)
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
+        self._add_column(conn, "tasks", "number", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column(conn, "messages", "metadata", "TEXT NOT NULL DEFAULT '{}'")
         self._add_column(conn, "tasks", "assignee_type", "TEXT NOT NULL DEFAULT ''")
         self._add_column(conn, "tasks", "project_id", "TEXT")
         self._add_column(conn, "tasks", "position", "INTEGER NOT NULL DEFAULT 0")
@@ -212,12 +233,43 @@ class Database:
         self._add_column(conn, "schedules", "last_fire_key", "TEXT")
         self._add_column(conn, "agents", "heartbeat_enabled", "INTEGER NOT NULL DEFAULT 1")
         self._add_column(conn, "agents", "heartbeat_interval", "INTEGER")
+        self._add_column(conn, "teams", "leader_agent", "TEXT NOT NULL DEFAULT ''")
+        self._add_column(conn, "teams", "max_rounds", "INTEGER NOT NULL DEFAULT 1")
+        self._add_column(conn, "teams", "stop_when_idle", "INTEGER NOT NULL DEFAULT 1")
+        self._backfill_task_numbers(conn)
 
     @staticmethod
     def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _backfill_task_numbers(conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT id, project_id
+            FROM tasks
+            WHERE number = 0
+            ORDER BY created_at ASC, id ASC
+            """
+        ).fetchall()
+        counters: dict[str, int] = {}
+        for row in rows:
+            key = row["project_id"] or "__global__"
+            if key not in counters:
+                if row["project_id"]:
+                    current = conn.execute(
+                        "SELECT COALESCE(MAX(number), 0) FROM tasks WHERE project_id = ? AND number > 0",
+                        (row["project_id"],),
+                    ).fetchone()[0]
+                else:
+                    current = conn.execute(
+                        "SELECT COALESCE(MAX(number), 0) FROM tasks WHERE project_id IS NULL AND number > 0"
+                    ).fetchone()[0]
+                counters[key] = current
+            counters[key] += 1
+            conn.execute("UPDATE tasks SET number = ? WHERE id = ?", (counters[key], row["id"]))
 
     def execute(self, query: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
         with self.connect() as conn:

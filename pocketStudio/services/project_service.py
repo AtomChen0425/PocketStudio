@@ -9,6 +9,21 @@ from pocketStudio.services.event_service import EventService
 
 
 class ProjectService:
+    PROJECT_COLORS = [
+        "#6366f1",
+        "#8b5cf6",
+        "#ec4899",
+        "#f43f5e",
+        "#ef4444",
+        "#f97316",
+        "#eab308",
+        "#22c55e",
+        "#14b8a6",
+        "#06b6d4",
+        "#3b82f6",
+        "#a855f7",
+    ]
+
     def __init__(self, db: Database, events: EventService) -> None:
         self.db = db
         self.events = events
@@ -19,12 +34,16 @@ class ProjectService:
 
     def create_project(self, payload: ProjectCreate) -> Project:
         project_id = self._project_id(payload.name)
+        count_row = self.db.fetch_one("SELECT COUNT(*) AS count FROM projects")
+        project_count = int(count_row["count"]) if count_row else 0
+        prefix = payload.prefix or self.generate_prefix(payload.name)
+        color = payload.color or self.PROJECT_COLORS[project_count % len(self.PROJECT_COLORS)]
         self.db.execute(
             """
             INSERT INTO projects (id, name, description, prefix, color, status)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (project_id, payload.name, payload.description, payload.prefix, payload.color, payload.status),
+            (project_id, payload.name, payload.description, prefix, color, payload.status),
         )
         project = self.get_project(project_id)
         self.events.emit("project.created", {"project_id": project.id, "name": project.name})
@@ -37,13 +56,16 @@ class ProjectService:
         return self._to_project(row)
 
     def update_project(self, project_id: str, payload: ProjectCreate) -> Project:
+        existing = self.get_project(project_id)
+        prefix = payload.prefix or existing.prefix or self.generate_prefix(payload.name)
+        color = payload.color or existing.color or self.PROJECT_COLORS[0]
         self.db.execute(
             """
             UPDATE projects
             SET name = ?, description = ?, prefix = ?, color = ?, status = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (payload.name, payload.description, payload.prefix, payload.color, payload.status, project_id),
+            (payload.name, payload.description, prefix, color, payload.status, project_id),
         )
         project = self.get_project(project_id)
         self.events.emit("project.updated", {"project_id": project.id})
@@ -81,6 +103,15 @@ class ProjectService:
         return f"{slug or 'project'}-{int(time.time() * 1000)}"
 
     @staticmethod
+    def generate_prefix(name: str) -> str:
+        words = [word for word in name.strip().split() if word]
+        if not words:
+            return "T"
+        if len(words) == 1:
+            return words[0][:3].upper()
+        return "".join(word[0].upper() for word in words[:3])
+
+    @staticmethod
     def _to_project(row) -> Project:
         return Project(
             id=row["id"],
@@ -103,4 +134,3 @@ class ProjectService:
             content=row["content"],
             created_at=row["created_at"],
         )
-

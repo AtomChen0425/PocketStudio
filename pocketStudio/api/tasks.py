@@ -11,8 +11,20 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 @router.get("", response_model=list[Task])
-def list_tasks(service: TaskService = Depends(get_task_service)) -> list[Task]:
-    return service.list()
+def list_tasks(
+    projectId: str | None = None,
+    status: str | None = None,
+    assignee: str | None = None,
+    service: TaskService = Depends(get_task_service),
+) -> list[Task]:
+    tasks = service.list()
+    if projectId:
+        tasks = [task for task in tasks if task.project_id == projectId]
+    if status:
+        tasks = [task for task in tasks if task.status == status]
+    if assignee:
+        tasks = [task for task in tasks if task.assignee == assignee]
+    return tasks
 
 
 @router.post("", response_model=Task)

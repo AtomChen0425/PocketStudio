@@ -37,6 +37,26 @@ class ChatService:
         )
         return [self._to_message(row) for row in rows]
 
+    def archives(self) -> list[dict]:
+        rows = self.db.fetch_all(
+            """
+            SELECT team_id, COUNT(*) AS count, MAX(created_at) AS last_time, MAX(id) AS last_message_id
+            FROM chat_messages
+            GROUP BY team_id
+            ORDER BY last_time DESC
+            """
+        )
+        return [
+            {
+                "teamId": row["team_id"],
+                "file": f"{row['team_id']}.sqlite",
+                "time": row["last_time"],
+                "count": row["count"],
+                "lastMessageId": row["last_message_id"],
+            }
+            for row in rows
+        ]
+
     @staticmethod
     def _to_message(row) -> ChatMessage:
         return ChatMessage(
@@ -46,4 +66,3 @@ class ChatService:
             message=row["message"],
             created_at=row["created_at"],
         )
-

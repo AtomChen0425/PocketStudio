@@ -12,6 +12,9 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
 ]
 
+[project.scripts]
+pocketstudio = "pocketStudio.cli:main"
+
 [project.optional-dependencies]
 test = [
     "pytest>=8.3.0",
