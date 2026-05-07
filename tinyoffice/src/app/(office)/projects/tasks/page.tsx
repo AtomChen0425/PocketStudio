@@ -137,7 +137,7 @@ function TasksPageInner() {
       try {
         for (const task of newlyInProgress) {
           const msg = `@${task.assignee} ${task.title}${task.description ? "\n\n" + task.description : ""}\n\n[task:${task.id}]`;
-          await sendMessage({ message: msg, sender: "Web", channel: "web" });
+          await sendMessage({ message: msg, sender: "Web", channel: "web", projectId: task.projectId });
         }
         await reorderTasks(colMap);
         refresh();

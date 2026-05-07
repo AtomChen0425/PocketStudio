@@ -108,11 +108,101 @@ def test_project_context_runs_agent_inside_project_workspace() -> None:
         )
         result = asyncio.run(orchestrator.process_message(message.id))
 
-        expected_workspace = home / "project-root" / ".pocketStudio" / "agents" / "scoped"
+        expected_workspace = home / "project-root"
         assert provider.workspaces == [expected_workspace]
         assert expected_workspace.is_dir()
+        assert not (expected_workspace / ".pocketStudio").exists()
+        assert not (expected_workspace / ".agents").exists()
+        assert not (expected_workspace / "memory").exists()
+        assert not (expected_workspace / "AGENTS.md").exists()
         assert "workspace=" in result.output
         assert orchestrator.agents.get("scoped").workspace != expected_workspace
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_project_without_workspace_keeps_agent_workspace() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        registry = ProviderRegistry()
+        provider = WorkspaceRecordingProvider()
+        registry.register(provider)
+        projects = ProjectService(db, events)
+        project = projects.create_project(ProjectCreate(name="Default Agent Workspace"))
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=TeamService(db),
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            projects=projects,
+        )
+        agent = orchestrator.agents.create(
+            AgentCreate(id="defaulted", name="Defaulted", role="Uses agent workspace", provider="recording")
+        )
+
+        message = orchestrator.enqueue(
+            MessageCreate(
+                target="@agent:defaulted",
+                content="work inside agent workspace",
+                metadata={"projectId": project.id},
+            )
+        )
+        asyncio.run(orchestrator.process_message(message.id))
+
+        assert project.workspace is None
+        assert provider.workspaces == [agent.workspace]
+        assert not (home / ".pocketStudio" / "projects").exists()
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_legacy_default_project_workspace_keeps_agent_workspace() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        registry = ProviderRegistry()
+        provider = WorkspaceRecordingProvider()
+        registry.register(provider)
+        projects = ProjectService(db, events)
+        project = projects.create_project(ProjectCreate(name="Legacy Default"))
+        db.execute(
+            "UPDATE projects SET workspace = ? WHERE id = ?",
+            (str(Path(".pocketStudio") / "projects" / project.id), project.id),
+        )
+        project = projects.get_project(project.id)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=TeamService(db),
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            projects=projects,
+        )
+        agent = orchestrator.agents.create(
+            AgentCreate(id="legacy", name="Legacy", role="Uses agent workspace", provider="recording")
+        )
+
+        message = orchestrator.enqueue(
+            MessageCreate(
+                target="@agent:legacy",
+                content="work inside agent workspace",
+                metadata={"projectId": project.id},
+            )
+        )
+        asyncio.run(orchestrator.process_message(message.id))
+
+        assert project.workspace is None
+        assert provider.workspaces == [agent.workspace]
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

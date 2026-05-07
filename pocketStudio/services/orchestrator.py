@@ -377,7 +377,8 @@ class Orchestrator:
         if not project_id or self.projects is None:
             return agent
         workspace = self.projects.project_agent_workspace(str(project_id), agent.id)
-        self.agents.ensure_workspace(workspace, agent)
+        if workspace is None:
+            return agent
         return agent.model_copy(update={"workspace": workspace})
 
     @staticmethod

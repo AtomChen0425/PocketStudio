@@ -75,6 +75,7 @@ function TasksLayoutInner({
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [newWorkspace, setNewWorkspace] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -90,15 +91,17 @@ function TasksLayoutInner({
       await createProject({
         name: newName.trim(),
         description: newDesc.trim(),
+        workspace: newWorkspace.trim() || null,
       });
       setNewName("");
       setNewDesc("");
+      setNewWorkspace("");
       setShowCreateDialog(false);
       refresh();
     } catch {
       // ignore
     }
-  }, [newName, newDesc, refresh]);
+  }, [newName, newDesc, newWorkspace, refresh]);
 
   const handleRename = useCallback(
     async (id: string) => {
@@ -331,6 +334,7 @@ function TasksLayoutInner({
                   setShowCreateDialog(false);
                   setNewName("");
                   setNewDesc("");
+                  setNewWorkspace("");
                 }}
               >
                 <X className="h-3.5 w-3.5" />
@@ -359,6 +363,21 @@ function TasksLayoutInner({
                 className="text-sm resize-none"
                 rows={3}
               />
+              <Input
+                value={newWorkspace}
+                onChange={(e) => setNewWorkspace(e.target.value)}
+                placeholder="Folder path (optional)"
+                className="text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newName.trim()) handleCreate();
+                  if (e.key === "Escape") {
+                    setShowCreateDialog(false);
+                    setNewName("");
+                    setNewDesc("");
+                    setNewWorkspace("");
+                  }
+                }}
+              />
             </div>
             <div className="flex gap-2 justify-end">
               <Button
@@ -368,6 +387,7 @@ function TasksLayoutInner({
                   setShowCreateDialog(false);
                   setNewName("");
                   setNewDesc("");
+                  setNewWorkspace("");
                 }}
               >
                 Cancel

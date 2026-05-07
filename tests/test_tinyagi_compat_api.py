@@ -175,6 +175,8 @@ def test_project_prefix_and_task_identifier_follow_tinyagi_shape() -> None:
     workspace_status = client.get(f"/api/projects/{project['id']}/workspace")
     assert workspace_status.status_code == 200
     assert workspace_status.json()["ok"] is True
+    assert workspace_status.json()["purpose"] == "working_directory"
+    assert not (Path(workspace) / ".pocketStudio").exists()
 
     first = client.post("/api/tasks", json={"title": unique("Task"), "projectId": project["id"]}).json()
     second = client.post("/api/tasks", json={"title": unique("Task"), "projectId": project["id"]}).json()
@@ -188,6 +190,24 @@ def test_project_prefix_and_task_identifier_follow_tinyagi_shape() -> None:
 
     filtered = client.get(f"/api/tasks?projectId={project['id']}").json()
     assert {task["id"] for task in filtered} >= {first["id"], second["id"]}
+
+
+def test_project_without_workspace_reports_unconfigured_working_directory() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/api/projects",
+        json={"name": unique("No Workspace"), "description": "Uses agent workspace"},
+    )
+    assert project_response.status_code == 200
+    project = project_response.json()["project"]
+    assert project["workspace"] is None
+
+    workspace_status = client.get(f"/api/projects/{project['id']}/workspace")
+    assert workspace_status.status_code == 200
+    assert workspace_status.json()["ok"] is True
+    assert workspace_status.json()["configured"] is False
+    assert workspace_status.json()["workspace"] is None
+    assert workspace_status.json()["checks"] == []
 
 
 def test_project_delete_detaches_tasks_and_task_filters_search_server_side() -> None:

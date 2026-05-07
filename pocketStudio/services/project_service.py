@@ -38,14 +38,15 @@ class ProjectService:
         project_count = int(count_row["count"]) if count_row else 0
         prefix = payload.prefix or self.generate_prefix(payload.name)
         color = payload.color or self.PROJECT_COLORS[project_count % len(self.PROJECT_COLORS)]
-        workspace = self._workspace_path(project_id, payload.workspace)
-        self.ensure_workspace(workspace)
+        workspace = self._workspace_path(payload.workspace)
+        if workspace is not None:
+            self.ensure_working_directory(workspace)
         self.db.execute(
             """
             INSERT INTO projects (id, name, description, prefix, color, workspace, status)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (project_id, payload.name, payload.description, prefix, color, str(workspace), payload.status),
+            (project_id, payload.name, payload.description, prefix, color, str(workspace) if workspace else None, payload.status),
         )
         project = self.get_project(project_id)
         self.events.emit("project.created", {"project_id": project.id, "name": project.name})
@@ -61,37 +62,53 @@ class ProjectService:
         existing = self.get_project(project_id)
         prefix = payload.prefix or existing.prefix or self.generate_prefix(payload.name)
         color = payload.color or existing.color or self.PROJECT_COLORS[0]
-        workspace = self._workspace_path(project_id, payload.workspace or existing.workspace)
-        self.ensure_workspace(workspace)
+        workspace = self._workspace_path(payload.workspace or existing.workspace)
+        if workspace is not None:
+            self.ensure_working_directory(workspace)
         self.db.execute(
             """
             UPDATE projects
             SET name = ?, description = ?, prefix = ?, color = ?, workspace = ?, status = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (payload.name, payload.description, prefix, color, str(workspace), payload.status, project_id),
+            (payload.name, payload.description, prefix, color, str(workspace) if workspace else None, payload.status, project_id),
         )
         project = self.get_project(project_id)
         self.events.emit("project.updated", {"project_id": project.id})
         return project
 
-    def project_agent_workspace(self, project_id: str, agent_id: str) -> Path:
+    def project_agent_workspace(self, project_id: str, agent_id: str) -> Path | None:
+        _ = agent_id
         project = self.get_project(project_id)
-        workspace = Path(project.workspace) if project.workspace else self._workspace_path(project.id, None)
-        path = workspace / ".pocketStudio" / "agents" / agent_id
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        workspace = self._workspace_path(project.workspace)
+        if workspace is None:
+            return None
+        self.ensure_working_directory(workspace)
+        return workspace
 
     def workspace_status(self, project_id: str, repair: bool = False) -> dict:
         project = self.get_project(project_id)
-        workspace = Path(project.workspace) if project.workspace else self._workspace_path(project.id, None)
+        workspace = self._workspace_path(project.workspace)
+        if workspace is None:
+            return {
+                "ok": True,
+                "configured": False,
+                "purpose": "working_directory",
+                "projectId": project.id,
+                "workspace": None,
+                "repaired": [],
+                "checks": [],
+                "before": [] if repair else None,
+            }
         before = self._workspace_checks(workspace)
         repaired = [item["path"] for item in before if not item["ok"]]
         if repair and repaired:
-            self.ensure_workspace(workspace)
+            self.ensure_working_directory(workspace)
         after = self._workspace_checks(workspace)
         return {
             "ok": all(item["ok"] for item in after),
+            "configured": True,
+            "purpose": "working_directory",
             "projectId": project.id,
             "workspace": str(workspace),
             "repaired": repaired if repair else [],
@@ -100,18 +117,13 @@ class ProjectService:
         }
 
     @staticmethod
-    def ensure_workspace(path: Path) -> None:
+    def ensure_working_directory(path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
-        (path / ".pocketStudio" / "agents").mkdir(parents=True, exist_ok=True)
-        (path / ".pocketStudio" / "tasks").mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _workspace_checks(workspace: Path) -> list[dict]:
         checks = [
             ("directory", workspace),
-            ("directory", workspace / ".pocketStudio"),
-            ("directory", workspace / ".pocketStudio" / "agents"),
-            ("directory", workspace / ".pocketStudio" / "tasks"),
         ]
         result = []
         for kind, path in checks:
@@ -174,10 +186,10 @@ class ProjectService:
         return prefixed_id(slug or "project")
 
     @staticmethod
-    def _workspace_path(project_id: str, workspace: str | None) -> Path:
-        if workspace:
-            return Path(workspace).expanduser()
-        return Path(".pocketStudio") / "projects" / project_id
+    def _workspace_path(workspace: str | None) -> Path | None:
+        if not workspace:
+            return None
+        return Path(workspace).expanduser()
 
     @staticmethod
     def generate_prefix(name: str) -> str:
@@ -194,17 +206,24 @@ class ProjectService:
 
     @staticmethod
     def _to_project(row) -> Project:
+        workspace = row["workspace"]
+        if workspace and Path(workspace) == ProjectService._legacy_default_workspace(row["id"]):
+            workspace = None
         return Project(
             id=row["id"],
             name=row["name"],
             description=row["description"],
             prefix=row["prefix"],
             color=row["color"],
-            workspace=row["workspace"],
+            workspace=workspace,
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    @staticmethod
+    def _legacy_default_workspace(project_id: str) -> Path:
+        return Path(".pocketStudio") / "projects" / project_id
 
     @staticmethod
     def _to_comment(row) -> TaskComment:
