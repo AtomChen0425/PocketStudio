@@ -69,6 +69,116 @@ def test_schedule_payload_includes_next_fire_preview() -> None:
         assert schedule["due"] is False
 
 
+def test_manual_schedule_fire_enqueues_message_and_updates_state() -> None:
+    agent_id = f"manual-schedule-agent-{uuid.uuid4().hex[:8]}"
+    run_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+    with TestClient(app) as client:
+        client.post("/api/agents", json={"id": agent_id, "name": "Manual Schedule Agent", "role": "Runs on demand", "provider": "local"})
+        created = client.post(
+            "/api/schedules",
+            json={"agentId": agent_id, "message": "manual fire check", "runAt": run_at, "label": f"manual-{agent_id}"},
+        )
+        schedule_id = created.json()["schedule"]["id"]
+
+        fired = client.post(f"/api/schedules/{schedule_id}/fire")
+
+        assert fired.status_code == 200
+        payload = fired.json()
+        assert payload["ok"] is True
+        assert payload["message"]["target"] == f"@agent:{agent_id}"
+        assert payload["message"]["content"] == "manual fire check"
+        assert payload["schedule"]["enabled"] is False
+        assert payload["schedule"]["lastFiredAt"] is not None
+
+        queued = client.get("/api/queue").json()
+        assert any(item["id"] == payload["messageId"] for item in queued)
+
+
+def test_manual_schedule_fire_requires_enabled_unless_forced() -> None:
+    agent_id = f"disabled-schedule-agent-{uuid.uuid4().hex[:8]}"
+
+    with TestClient(app) as client:
+        client.post("/api/agents", json={"id": agent_id, "name": "Disabled Schedule Agent", "role": "Runs when forced", "provider": "local"})
+        created = client.post(
+            "/api/schedules",
+            json={
+                "agentId": agent_id,
+                "message": "forced fire check",
+                "cron": "0 * * * *",
+                "label": f"disabled-{agent_id}",
+                "enabled": False,
+            },
+        )
+        schedule_id = created.json()["schedule"]["id"]
+
+        blocked = client.post(f"/api/schedules/{schedule_id}/fire")
+        forced = client.post(f"/api/schedules/{schedule_id}/fire", json={"force": True})
+
+        assert blocked.status_code == 409
+        assert forced.status_code == 200
+        assert forced.json()["message"]["content"] == "forced fire check"
+
+
+def test_invalid_cron_is_rejected_before_persisting() -> None:
+    agent_id = f"invalid-cron-agent-{uuid.uuid4().hex[:8]}"
+
+    with TestClient(app) as client:
+        client.post("/api/agents", json={"id": agent_id, "name": "Invalid Cron Agent", "role": "Validates cron", "provider": "local"})
+
+        created = client.post(
+            "/api/schedules",
+            json={"agentId": agent_id, "message": "bad cron", "cron": "99 * * * *", "label": f"invalid-{agent_id}"},
+        )
+        validated = client.post(
+            "/api/schedules/validate",
+            json={"agentId": agent_id, "message": "bad cron", "cron": "* * * * 9", "label": f"invalid-preview-{agent_id}"},
+        )
+
+        assert created.status_code == 422
+        assert "outside supported range" in created.json()["detail"]
+        assert validated.status_code == 200
+        assert validated.json()["ok"] is False
+        assert client.get(f"/api/schedules?agent={agent_id}").json() == []
+
+
+def test_schedule_label_is_unique_and_can_delete_by_label() -> None:
+    agent_id = f"label-schedule-agent-{uuid.uuid4().hex[:8]}"
+    label = f"unique-label-{agent_id}"
+
+    with TestClient(app) as client:
+        client.post("/api/agents", json={"id": agent_id, "name": "Label Schedule Agent", "role": "Uses labels", "provider": "local"})
+        first = client.post("/api/schedules", json={"agentId": agent_id, "message": "first", "cron": "0 * * * *", "label": label})
+        duplicate = client.post("/api/schedules", json={"agentId": agent_id, "message": "second", "cron": "5 * * * *", "label": label})
+
+        assert first.status_code == 200
+        assert duplicate.status_code == 422
+        assert "already exists" in duplicate.json()["detail"]
+
+        deleted = client.delete(f"/api/schedules/{label}")
+
+        assert deleted.status_code == 200
+        assert client.get(f"/api/schedules?agent={agent_id}").json() == []
+
+
+def test_schedule_validate_returns_preview_without_persisting() -> None:
+    agent_id = f"validate-schedule-agent-{uuid.uuid4().hex[:8]}"
+    run_at = (datetime.now(timezone.utc) + timedelta(minutes=3)).isoformat()
+
+    with TestClient(app) as client:
+        client.post("/api/agents", json={"id": agent_id, "name": "Validate Schedule Agent", "role": "Previews validation", "provider": "local"})
+
+        validated = client.post(
+            "/api/schedules/validate",
+            json={"agentId": agent_id, "message": "preview only", "runAt": run_at, "label": f"validate-{agent_id}"},
+        )
+
+        assert validated.status_code == 200
+        assert validated.json()["ok"] is True
+        assert validated.json()["nextFireAt"] is not None
+        assert client.get(f"/api/schedules?agent={agent_id}").json() == []
+
+
 def test_cron_schedule_preview_finds_next_matching_minute() -> None:
     settings = Settings(pocketStudio_home=Path(".pytest-local") / f"schedule-home-{uuid.uuid4().hex[:8]}")
     db = Database(settings.database_path)

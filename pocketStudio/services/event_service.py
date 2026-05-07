@@ -32,6 +32,10 @@ class EventService:
         if listener not in self._listeners:
             self._listeners.append(listener)
 
+    def remove_listener(self, listener: Callable[[Event], None]) -> None:
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+
     def list(self, limit: int = 100, since: int = 0) -> list[Event]:
         rows = self.db.fetch_all(
             "SELECT * FROM events WHERE id > ? ORDER BY id DESC LIMIT ?",
@@ -60,6 +64,95 @@ class EventService:
                 continue
             records.append(record)
         return records[-limit:]
+
+    def office_event(self, event: Event) -> tuple[str, dict]:
+        payload = event.payload
+        timestamp = self._event_timestamp_ms(event.created_at)
+        base = {"timestamp": timestamp, "eventId": event.id}
+        if event.type == "message.queued":
+            data = {
+                **base,
+                "type": "message:incoming",
+                "messageId": str(payload.get("message_id", "")),
+                "target": payload.get("target", ""),
+                "message": payload.get("content", ""),
+                "sender": payload.get("sender", "Web"),
+                "metadata": payload.get("metadata", {}),
+            }
+            return data["type"], data
+        if event.type == "message.running":
+            data = {**base, "type": "message:processing", "messageId": str(payload.get("message_id", ""))}
+            return data["type"], data
+        if event.type == "message.done":
+            data = {**base, "type": "message:done", "messageId": str(payload.get("message_id", ""))}
+            return data["type"], data
+        if event.type == "message.failed":
+            data = {
+                **base,
+                "type": "message:failed",
+                "messageId": str(payload.get("message_id", "")),
+                "status": payload.get("status", "failed"),
+                "error": payload.get("error", ""),
+            }
+            return data["type"], data
+        if event.type == "agent.started":
+            data = {
+                **base,
+                "type": "agent:invoke",
+                "agentId": payload.get("agent_id", ""),
+                "provider": payload.get("provider", ""),
+            }
+            return data["type"], data
+        if event.type == "agent.process":
+            data = {
+                **base,
+                "type": "agent:progress",
+                "agentId": payload.get("agent_id", ""),
+                "provider": payload.get("provider", ""),
+                "process": payload.get("process", {}),
+            }
+            return data["type"], data
+        if event.type == "agent.completed":
+            data = {
+                **base,
+                "type": "agent:response",
+                "agentId": payload.get("agent_id", ""),
+                "content": payload.get("content", "Completed"),
+            }
+            return data["type"], data
+        if event.type == "agent.mention":
+            data = {
+                **base,
+                "type": "agent:mention",
+                "teamId": payload.get("team_id", ""),
+                "fromAgent": payload.get("from_agent", ""),
+                "toAgent": payload.get("to_agent", ""),
+            }
+            return data["type"], data
+        if event.type == "response.queued":
+            data = {
+                **base,
+                "type": "response:queued",
+                "responseId": payload.get("response_id"),
+                "messageId": str(payload.get("message_id", "")),
+                "channel": payload.get("channel", ""),
+                "sender": payload.get("sender", ""),
+                "senderId": payload.get("sender_id"),
+                "agent": payload.get("agent"),
+                "status": payload.get("status"),
+            }
+            return data["type"], data
+        if event.type == "team.chatroom":
+            data = {
+                **base,
+                "type": "team:chatroom",
+                "teamId": payload.get("team_id", ""),
+                "fromAgent": payload.get("from_agent", ""),
+                "delivered": payload.get("delivered", 0),
+            }
+            return data["type"], data
+        event_type = event.type.replace(".", ":")
+        return event_type, {**base, "type": event_type, **payload}
 
     def _append_log(self, event_type: str, payload_json: str, created_at: str | None = None) -> None:
         if self.settings is None:
@@ -94,6 +187,16 @@ class EventService:
             "type": match.group("type"),
             "payload": payload,
         }
+
+    @staticmethod
+    def _event_timestamp_ms(value: str) -> int:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return int(datetime.now(timezone.utc).timestamp() * 1000)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
 
     @staticmethod
     def _to_event(row) -> Event:

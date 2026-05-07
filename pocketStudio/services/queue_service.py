@@ -10,6 +10,7 @@ from pocketStudio.models import AgentMessage, MessageCreate, MessageStatus, Queu
 from pocketStudio.services.event_service import EventService
 from pocketStudio.services.plugin_service import PluginService
 from pocketStudio.services.response_service import ResponseService
+from pocketStudio.services.team_routing import convert_tags_to_readable
 
 
 class QueueService:
@@ -68,19 +69,111 @@ class QueueService:
             )
         return [self._to_message(row) for row in rows]
 
+    def grouped_chatroom_messages(
+        self,
+        limit: int = 100,
+        status: MessageStatus | None = None,
+    ) -> dict:
+        messages = list(reversed(self.list(limit=limit, status=status)))
+        grouped: list[dict] = []
+        message_ids: list[list[int]] = []
+        pending: list[QueueMessage] = []
+
+        def flush() -> None:
+            nonlocal pending
+            if not pending:
+                return
+            grouped.append(self._combined_chatroom_payload(pending))
+            message_ids.append([message.id for message in pending])
+            pending = []
+
+        for message in messages:
+            if self._is_chatroom_message(message):
+                pending.append(message)
+                continue
+            flush()
+            grouped.append(message.model_dump())
+            message_ids.append([message.id])
+        flush()
+        return {"messages": grouped, "messageIds": message_ids}
+
     def status(self) -> QueueStatus:
         rows = self.db.fetch_all("SELECT status, COUNT(*) AS count FROM messages GROUP BY status")
         counts = {row["status"]: row["count"] for row in rows}
         queued = counts.get("queued", 0) + counts.get("failed", 0)
         running = counts.get("running", 0)
         done = counts.get("done", 0)
+        dead = counts.get("dead", 0)
+        failed = counts.get("failed", 0)
+        responses_pending = self._pending_response_count()
         return QueueStatus(
             incoming=queued,
             queued=queued,
             processing=running,
-            outgoing=self._pending_response_count(),
+            outgoing=responses_pending,
             activeConversations=queued + running,
+            pending=queued,
+            completed=done,
+            dead=dead,
+            failed=failed,
+            responsesPending=responses_pending,
         )
+
+    def diagnostics(self, stale_threshold_seconds: int | None = None) -> dict:
+        stale_threshold = stale_threshold_seconds or self.settings.stale_processing_seconds
+        status = self.status().model_dump()
+        oldest_queued = self.db.fetch_one(
+            """
+            SELECT *
+            FROM messages
+            WHERE status IN ('queued', 'failed') AND attempts < ?
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (self.settings.queue_max_attempts,),
+        )
+        oldest_running = self.db.fetch_one(
+            """
+            SELECT *
+            FROM messages
+            WHERE status = 'running'
+            ORDER BY updated_at ASC, id ASC
+            LIMIT 1
+            """
+        )
+        retryable_row = self.db.fetch_one(
+            "SELECT COUNT(*) AS count FROM messages WHERE status IN ('failed', 'dead')"
+        )
+        exhausted_row = self.db.fetch_one(
+            "SELECT COUNT(*) AS count FROM messages WHERE attempts >= ? AND status != 'done'",
+            (self.settings.queue_max_attempts,),
+        )
+        stale_row = self.db.fetch_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM messages
+            WHERE status = 'running'
+              AND updated_at <= datetime('now', ?)
+            """,
+            (f"-{stale_threshold} seconds",),
+        )
+        now_ms = int(time.time() * 1000)
+        oldest_queued_at = self._timestamp_ms(oldest_queued["created_at"]) if oldest_queued else None
+        oldest_running_at = self._timestamp_ms(oldest_running["updated_at"]) if oldest_running else None
+        return {
+            "status": status,
+            "maxAttempts": self.settings.queue_max_attempts,
+            "staleThresholdSeconds": stale_threshold,
+            "retryable": retryable_row["count"] if retryable_row else 0,
+            "exhausted": exhausted_row["count"] if exhausted_row else 0,
+            "staleProcessing": stale_row["count"] if stale_row else 0,
+            "oldestQueued": self._message_summary(oldest_queued) if oldest_queued else None,
+            "oldestQueuedAt": oldest_queued_at,
+            "oldestQueuedAgeMs": max(0, now_ms - oldest_queued_at) if oldest_queued_at is not None else None,
+            "oldestRunning": self._message_summary(oldest_running) if oldest_running else None,
+            "oldestRunningAt": oldest_running_at,
+            "oldestRunningAgeMs": max(0, now_ms - oldest_running_at) if oldest_running_at is not None else None,
+        }
 
     def agent_status(self) -> list[dict]:
         rows = self.db.fetch_all(
@@ -196,6 +289,9 @@ class QueueService:
 
     def list_dead(self, limit: int = 100) -> list[QueueMessage]:
         return self.list(limit=limit, status=MessageStatus.dead)
+
+    def dead_payloads(self, limit: int = 100) -> list[dict]:
+        return [self._dead_payload(message) for message in self.list_dead(limit)]
 
     def retry_dead(self, message_id: int) -> bool:
         row = self.db.fetch_one("SELECT id FROM messages WHERE id = ? AND status = 'dead'", (message_id,))
@@ -315,7 +411,18 @@ class QueueService:
         )
         row = self.db.fetch_one("SELECT * FROM responses WHERE id = ?", (cursor.lastrowid,))
         response = self._to_response(row)
-        self.events.emit("response.queued", {"response_id": response.id, "message_id": message_id, "channel": channel})
+        self.events.emit(
+            "response.queued",
+            {
+                "response_id": response.id,
+                "message_id": message_id,
+                "channel": channel,
+                "sender": sender,
+                "sender_id": sender_id,
+                "agent": agent,
+                "status": response.status,
+            },
+        )
         return response
 
     def get_responses_for_channel(self, channel: str) -> list[ResponseJob]:
@@ -370,8 +477,9 @@ class QueueService:
             runs = [{"agent_id": "orchestrator", "output": message.result}]
         responses = []
         for index, run in enumerate(runs):
+            response_text, team_metadata = self._prepare_team_response_text(run)
             prepared = self.responses.prepare(
-                run.get("output", ""),
+                response_text,
                 context={
                     "channel": "web",
                     "sender": message.sender,
@@ -380,7 +488,7 @@ class QueueService:
                     "agentId": run.get("agent_id"),
                 },
             )
-            metadata = {"queue_message_id": message.id, **prepared.metadata}
+            metadata = {"queue_message_id": message.id, **team_metadata, **prepared.metadata}
             responses.append(
                 self.enqueue_response(
                     message_id=f"{message.id}-{index}",
@@ -429,6 +537,30 @@ class QueueService:
         return payloads
 
     @staticmethod
+    def _dead_payload(message: QueueMessage) -> dict:
+        channel = message.metadata.get("channel", "web")
+        sender_id = message.metadata.get("senderId") or message.metadata.get("sender_id")
+        payload = message.model_dump()
+        payload.update(
+            {
+                "data": {
+                    "channel": channel,
+                    "sender": message.sender,
+                    "senderId": sender_id,
+                    "message": message.content,
+                    "messageId": str(message.id),
+                    "agent": QueueService._target_label(message.target),
+                    "target": message.target,
+                    "metadata": message.metadata,
+                },
+                "failedReason": message.error,
+                "attemptsMade": message.attempts,
+                "timestamp": QueueService._timestamp_ms(message.created_at),
+            }
+        )
+        return payload
+
+    @staticmethod
     def _target_label(target: str) -> str:
         if target.startswith("@agent:") or target.startswith("@team:"):
             return target.split(":", 1)[1]
@@ -436,9 +568,39 @@ class QueueService:
             return target[1:]
         return target
 
+    @staticmethod
+    def _is_chatroom_message(message: QueueMessage) -> bool:
+        return message.metadata.get("kind") == "chatroom" or message.sender.startswith("chatroom:")
+
+    @staticmethod
+    def _combined_chatroom_payload(messages: list[QueueMessage]) -> dict:
+        first = messages[0].model_dump()
+        first["id"] = messages[0].id
+        first["content"] = "\n\n".join(message.content for message in messages)
+        metadata = dict(first.get("metadata") or {})
+        metadata["groupedMessageIds"] = [message.id for message in messages]
+        metadata["groupedCount"] = len(messages)
+        first["metadata"] = metadata
+        return first
+
     def _pending_response_count(self) -> int:
         row = self.db.fetch_one("SELECT COUNT(*) AS count FROM responses WHERE status = 'pending'")
         return row["count"] if row else 0
+
+    @staticmethod
+    def _message_summary(row) -> dict:
+        metadata = json.loads(row["metadata"] or "{}")
+        return {
+            "id": row["id"],
+            "target": row["target"],
+            "agent": QueueService._target_label(row["target"]),
+            "sender": row["sender"],
+            "status": row["status"],
+            "attempts": row["attempts"],
+            "channel": metadata.get("channel", "web"),
+            "createdAt": QueueService._timestamp_ms(row["created_at"]),
+            "updatedAt": QueueService._timestamp_ms(row["updated_at"]),
+        }
 
     @staticmethod
     def _timestamp_ms(value: str) -> int:
@@ -514,3 +676,12 @@ class QueueService:
             "status": response.status,
             "ackedAt": response.acked_at,
         }
+
+    @staticmethod
+    def _prepare_team_response_text(run: dict) -> tuple[str, dict]:
+        output = run.get("output", "") or ""
+        agent_id = run.get("agent_id")
+        readable = convert_tags_to_readable(output, str(agent_id) if agent_id else None)
+        if readable == output:
+            return output, {}
+        return readable, {"teamTagsConverted": True}

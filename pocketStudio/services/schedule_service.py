@@ -56,7 +56,8 @@ class ScheduleService:
     def create(self, payload: ScheduleCreate) -> Schedule:
         self._validate_payload(payload)
         schedule_id = prefixed_id("schedule")
-        label = payload.label or payload.cron or payload.run_at or f"Message {payload.agent_id}"
+        label = payload.label or f"sched-{schedule_id}"
+        self._ensure_label_available(label)
         self.db.execute(
             """
             INSERT INTO schedules (id, label, cron, run_at, agent_id, message, channel, sender, enabled)
@@ -79,13 +80,16 @@ class ScheduleService:
         return schedule
 
     def get(self, schedule_id: str) -> Schedule:
-        row = self.db.fetch_one("SELECT * FROM schedules WHERE id = ?", (schedule_id,))
+        row = self._find_row(schedule_id)
         if row is None:
             raise KeyError(f"Schedule '{schedule_id}' not found")
         return self._to_schedule(row)
 
     def update(self, schedule_id: str, payload: ScheduleCreate) -> Schedule:
+        current = self.get(schedule_id)
         self._validate_payload(payload)
+        label = payload.label or current.label
+        self._ensure_label_available(label, exclude_id=current.id)
         self.db.execute(
             """
             UPDATE schedules
@@ -94,7 +98,7 @@ class ScheduleService:
             WHERE id = ?
             """,
             (
-                payload.label or payload.cron or payload.run_at or f"Message {payload.agent_id}",
+                label,
                 payload.cron,
                 payload.run_at,
                 payload.agent_id,
@@ -110,8 +114,43 @@ class ScheduleService:
         return schedule
 
     def delete(self, schedule_id: str) -> None:
-        self.db.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
-        self.events.emit("schedule.deleted", {"schedule_id": schedule_id})
+        schedule = self.get(schedule_id)
+        self.db.execute("DELETE FROM schedules WHERE id = ?", (schedule.id,))
+        self.events.emit("schedule.deleted", {"schedule_id": schedule.id, "label": schedule.label})
+
+    def validate(self, payload: ScheduleCreate, now: datetime | None = None) -> dict:
+        self._validate_payload(payload)
+        schedule = Schedule(
+            id="schedule-preview",
+            label=payload.label or "preview",
+            cron=payload.cron,
+            run_at=payload.run_at,
+            agent_id=payload.agent_id,
+            message=payload.message,
+            channel=payload.channel,
+            sender=payload.sender,
+            enabled=payload.enabled,
+            created_at="",
+            updated_at="",
+        )
+        return {"ok": True, **self.schedule_status(schedule, now)}
+
+    def fire(self, schedule_id: str, queue: QueueService, now: datetime | None = None, force: bool = False) -> QueueMessage:
+        schedule = self.get(schedule_id)
+        if not schedule.enabled and not force:
+            raise ValueError("Schedule is disabled")
+        now = now or datetime.now(timezone.utc)
+        message = self._fire(queue, schedule, now)
+        updates = ["last_fired_at = ?", "updated_at = CURRENT_TIMESTAMP"]
+        params: list[object] = [self._epoch_ms(now)]
+        if schedule.run_at:
+            updates.append("enabled = 0")
+        if schedule.cron:
+            updates.append("last_fire_key = ?")
+            params.append(now.strftime("%Y-%m-%dT%H:%M"))
+        params.append(schedule.id)
+        self.db.execute(f"UPDATE schedules SET {', '.join(updates)} WHERE id = ?", tuple(params))
+        return message
 
     def fire_due(self, queue: QueueService, now: datetime | None = None) -> list[QueueMessage]:
         now = now or datetime.now(timezone.utc)
@@ -122,28 +161,12 @@ class ScheduleService:
             if schedule.run_at:
                 run_at = self._parse_datetime(schedule.run_at)
                 if run_at and run_at <= now:
-                    fired.append(self._fire(queue, schedule, now))
-                    self.db.execute(
-                        """
-                        UPDATE schedules
-                        SET enabled = 0, last_fired_at = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                        """,
-                        (self._epoch_ms(now), schedule.id),
-                    )
+                    fired.append(self.fire(schedule.id, queue, now))
                 continue
 
             fire_key = now.strftime("%Y-%m-%dT%H:%M")
             if schedule.cron and schedule.last_fire_key != fire_key and self._cron_matches(schedule.cron, now):
-                fired.append(self._fire(queue, schedule, now))
-                self.db.execute(
-                    """
-                    UPDATE schedules
-                    SET last_fired_at = ?, last_fire_key = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (self._epoch_ms(now), fire_key, schedule.id),
-                )
+                fired.append(self.fire(schedule.id, queue, now))
         return fired
 
     def _fire(self, queue: QueueService, schedule: Schedule, now: datetime) -> QueueMessage:
@@ -169,12 +192,31 @@ class ScheduleService:
     def _validate_payload(self, payload: ScheduleCreate) -> None:
         if not payload.cron and not payload.run_at:
             raise ValueError("Either cron or runAt is required")
+        if not payload.agent_id.strip():
+            raise ValueError("agentId is required")
+        if not payload.message.strip():
+            raise ValueError("message is required")
         if payload.run_at and self._parse_datetime(payload.run_at) is None:
             raise ValueError("runAt must be a valid ISO datetime")
         if payload.cron:
             parts = payload.cron.split()
             if len(parts) != 5:
                 raise ValueError("cron must use five fields: minute hour day month weekday")
+            ranges = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
+            for field, (minimum, maximum) in zip(parts, ranges, strict=True):
+                if not self._field_is_valid(field, minimum, maximum):
+                    raise ValueError(f"cron field '{field}' is outside supported range {minimum}-{maximum}")
+
+    def _ensure_label_available(self, label: str, exclude_id: str | None = None) -> None:
+        row = self.db.fetch_one("SELECT id FROM schedules WHERE label = ?", (label,))
+        if row and row["id"] != exclude_id:
+            raise ValueError(f"A schedule with label '{label}' already exists")
+
+    def _find_row(self, identifier: str):
+        return self.db.fetch_one(
+            "SELECT * FROM schedules WHERE id = ? OR label = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1",
+            (identifier, identifier, identifier),
+        )
 
     @staticmethod
     def _parse_datetime(value: str) -> datetime | None:
@@ -232,6 +274,33 @@ class ScheduleService:
             if start <= value <= end:
                 return True
         return False
+
+    @staticmethod
+    def _field_is_valid(field: str, minimum: int, maximum: int) -> bool:
+        for item in field.split(","):
+            item = item.strip()
+            if not item:
+                return False
+            if "/" in item:
+                base, step_text = item.split("/", 1)
+                try:
+                    step = int(step_text)
+                except ValueError:
+                    return False
+                if step <= 0:
+                    return False
+                if base == "*":
+                    continue
+                start, end = ScheduleService._range(base)
+            elif item == "*":
+                continue
+            else:
+                start, end = ScheduleService._range(item)
+            if start is None or end is None:
+                return False
+            if start > end or start < minimum or end > maximum:
+                return False
+        return True
 
     @staticmethod
     def _range(value: str) -> tuple[int | None, int | None]:

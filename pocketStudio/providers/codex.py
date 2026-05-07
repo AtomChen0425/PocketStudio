@@ -37,6 +37,7 @@ class CodexProvider(AgentProvider):
             args,
             process_key=request.agent.id,
             cwd=request.agent.workspace,
+            env=self._env(),
             on_stdout_line=on_line,
             stdin_text=stdin_text,
         )
@@ -79,6 +80,13 @@ class CodexProvider(AgentProvider):
             args.append("-")
             return args, prompt
         return args, None
+
+    @staticmethod
+    def _env() -> dict[str, str] | None:
+        codex_home = os.getenv("POCKETSTUDIO_CODEX_HOME")
+        if not codex_home:
+            return None
+        return {"CODEX_HOME": codex_home}
 
     @staticmethod
     def _prompt(request: ProviderRequest) -> str:

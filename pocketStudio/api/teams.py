@@ -50,6 +50,7 @@ def set_team_leader(team_id: str, agent_id: str, service: TeamService = Depends(
         raise not_found(exc) from exc
 
 
-@router.delete("/{team_id}", status_code=204)
-def delete_team(team_id: str, service: TeamService = Depends(get_team_service)) -> None:
+@router.delete("/{team_id}")
+def delete_team(team_id: str, service: TeamService = Depends(get_team_service)) -> dict:
     service.delete(team_id)
+    return {"ok": True}

@@ -27,6 +27,54 @@ def test_heartbeat_reads_agent_file_and_respects_interval() -> None:
     assert snapshot["agents"][agent_id]["lastMessageId"] == message.id
     assert snapshot["agents"][agent_id]["nextDueAt"] > 1_000_000
     assert snapshot["agents"][agent_id]["due"] is False
+    assert snapshot["enabledCount"] >= 1
+    assert snapshot["dueCount"] >= 0
+    assert snapshot["baseInterval"] >= 10
+
+
+def test_heartbeat_tick_force_and_clear_state() -> None:
+    from fastapi.testclient import TestClient
+
+    from pocketStudio.main import app
+
+    agent_id = f"heartbeat-tick-{uuid.uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        client.post(
+            "/api/agents",
+            json={"id": agent_id, "name": "Heartbeat Tick", "role": "Ticks manually", "provider": "local", "heartbeat_interval": 3600},
+        )
+
+        first = client.post("/api/heartbeat/tick", json={"agentId": agent_id, "force": True})
+        second = client.post("/api/heartbeat/tick", json={"agentId": agent_id})
+        cleared = client.delete(f"/api/heartbeat/state?agent={agent_id}")
+        third = client.post("/api/heartbeat/tick", json={"agentId": agent_id})
+
+        assert first.status_code == 200
+        assert first.json()["queued"] == 1
+        assert second.status_code == 200
+        assert second.json()["queued"] == 0
+        assert cleared.status_code == 200
+        assert cleared.json()["cleared"] == 1
+        assert third.status_code == 200
+        assert third.json()["queued"] == 1
+
+        messages = [
+            item
+            for item in client.get("/api/queue").json()
+            if item["target"] == f"@agent:{agent_id}" and item["metadata"].get("channel") == "heartbeat"
+        ]
+        assert len(messages) >= 2
+
+
+def test_heartbeat_tick_returns_404_for_unknown_agent() -> None:
+    from fastapi.testclient import TestClient
+
+    from pocketStudio.main import app
+
+    with TestClient(app) as client:
+        response = client.post("/api/heartbeat/tick", json={"agentId": f"missing-{uuid.uuid4().hex[:8]}", "force": True})
+
+        assert response.status_code == 404
 
 
 def test_agent_heartbeat_api_updates_runtime_config() -> None:

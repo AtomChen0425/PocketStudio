@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from pocketStudio.api.errors import not_found
 from pocketStudio.core.dependencies import (
@@ -145,6 +146,22 @@ def _schedule_payload_with_status(schedule, schedules: ScheduleService) -> dict:
     return payload
 
 
+def _schedule_create_payload(payload: dict[str, Any]) -> ScheduleCreate:
+    try:
+        return ScheduleCreate(
+            label=payload.get("label"),
+            cron=payload.get("cron") or "",
+            run_at=payload.get("runAt") or payload.get("run_at"),
+            agent_id=payload.get("agentId") or payload.get("agent_id") or "",
+            message=payload.get("message") or "",
+            channel=payload.get("channel") or "web",
+            sender=payload.get("sender") or "Web",
+            enabled=payload.get("enabled", True),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _custom_providers(db: Database) -> dict:
     rows = db.fetch_all("SELECT * FROM custom_providers ORDER BY id")
     providers = {
@@ -176,6 +193,58 @@ def _save_custom_provider_row(provider_id: str, payload: dict[str, Any], db: Dat
             payload.get("model"),
         ),
     )
+
+
+def _settings_apply_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    custom_providers = []
+    for provider_id, provider in (payload.get("models") or {}).get("custom_providers", {}).items():
+        if not isinstance(provider, dict):
+            raise ValueError(f"models.custom_providers.{provider_id} must be an object")
+        custom_providers.append((provider_id, provider))
+
+    agent_models = []
+    for agent_id, config in (payload.get("agents") or {}).items():
+        if not isinstance(config, dict):
+            raise ValueError(f"agents.{agent_id} must be an object")
+        agent_models.append(
+            AgentCreate(
+                id=agent_id,
+                name=config.get("name") or agent_id,
+                role=config.get("role") or config.get("system_prompt") or config.get("name") or agent_id,
+                system_prompt=config.get("system_prompt") or "",
+                provider=config.get("provider") or "local",
+                model=config.get("model") or None,
+                workspace=config.get("working_directory") or config.get("workspace") or None,
+                enabled=config.get("enabled", True),
+                heartbeat_enabled=(config.get("heartbeat") or {}).get("enabled", True),
+                heartbeat_interval=(config.get("heartbeat") or {}).get("interval"),
+            )
+        )
+
+    team_models = []
+    for team_id, config in (payload.get("teams") or {}).items():
+        if not isinstance(config, dict):
+            raise ValueError(f"teams.{team_id} must be an object")
+        team_models.append(
+            TeamCreate(
+                id=team_id,
+                name=config.get("name") or team_id,
+                mode=config.get("mode") or "chain",
+                agent_ids=config.get("agents") or config.get("agent_ids") or [],
+                leader_agent=config.get("leader_agent") or config.get("leaderAgent") or "",
+                max_rounds=config.get("max_rounds") or config.get("maxRounds") or 1,
+                stop_when_idle=config.get("stop_when_idle", config.get("stopWhenIdle", True)),
+            )
+        )
+
+    return {"customProviders": custom_providers, "agents": agent_models, "teams": team_models}
+
+
+def _validate_settings_apply_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return _settings_apply_plan(payload)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _target_agent_id(target: str) -> str:
@@ -223,7 +292,24 @@ def validate_settings_snapshot(
         settings_service.validate(settings_payload)
     except SettingsValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _validate_settings_apply_plan(settings_payload)
     return {"ok": True}
+
+
+@router.post("/settings/preview")
+def preview_settings_snapshot(
+    payload: dict[str, Any],
+    settings_service: SettingsService = Depends(get_settings_service),
+) -> dict:
+    settings_payload = payload.get("settings") if "settings" in payload else payload
+    if not isinstance(settings_payload, dict):
+        raise HTTPException(status_code=422, detail="settings payload must be an object")
+    try:
+        preview = settings_service.preview_update(settings_payload)
+    except SettingsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _validate_settings_apply_plan(settings_payload)
+    return preview
 
 
 @router.get("/settings/backup")
@@ -256,38 +342,17 @@ def update_settings_snapshot(
     registry: ProviderRegistry = Depends(get_provider_registry),
     settings_service: SettingsService = Depends(get_settings_service),
 ) -> dict:
+    plan = _validate_settings_apply_plan(payload)
     try:
         settings_service.update(payload)
     except SettingsValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    for provider_id, provider in (payload.get("models") or {}).get("custom_providers", {}).items():
+    for provider_id, provider in plan["customProviders"]:
         _save_custom_provider_row(provider_id, provider, db)
-    for agent_id, config in (payload.get("agents") or {}).items():
-        agents.create(
-            AgentCreate(
-                id=agent_id,
-                name=config.get("name") or agent_id,
-                role=config.get("system_prompt") or config.get("name") or agent_id,
-                system_prompt=config.get("system_prompt") or "",
-                provider=config.get("provider") or "local",
-                model=config.get("model") or None,
-                workspace=config.get("working_directory") or None,
-                heartbeat_enabled=(config.get("heartbeat") or {}).get("enabled", True),
-                heartbeat_interval=(config.get("heartbeat") or {}).get("interval"),
-            )
-        )
-    for team_id, config in (payload.get("teams") or {}).items():
-        teams.create(
-            TeamCreate(
-                id=team_id,
-                name=config.get("name") or team_id,
-                mode="chain",
-                agent_ids=config.get("agents") or [],
-                leader_agent=config.get("leader_agent") or "",
-                max_rounds=config.get("max_rounds") or config.get("maxRounds") or 1,
-                stop_when_idle=config.get("stop_when_idle", config.get("stopWhenIdle", True)),
-            )
-        )
+    for agent in plan["agents"]:
+        agents.create(agent)
+    for team in plan["teams"]:
+        teams.create(team)
     registry.reload_custom()
     return {"ok": True, "settings": get_settings_snapshot(agents, teams, db, settings_service)}
 
@@ -357,6 +422,14 @@ def queue_status(queue: QueueService = Depends(get_queue_service)) -> dict:
     return queue.status().model_dump()
 
 
+@router.get("/queue/diagnostics")
+def queue_diagnostics(
+    stale_threshold_seconds: int | None = None,
+    queue: QueueService = Depends(get_queue_service),
+) -> dict:
+    return queue.diagnostics(stale_threshold_seconds)
+
+
 @router.get("/queue/agents")
 def queue_agent_status(queue: QueueService = Depends(get_queue_service)) -> list[dict]:
     return queue.agent_status()
@@ -367,7 +440,7 @@ def queue_dead(
     limit: int = Query(default=100, ge=1, le=500),
     queue: QueueService = Depends(get_queue_service),
 ) -> list[dict]:
-    return [message.model_dump() for message in queue.list_dead(limit)]
+    return queue.dead_payloads(limit)
 
 
 @router.post("/queue/dead/{message_id}/retry")
@@ -404,6 +477,11 @@ def active_processes(registry: ProviderRegistry = Depends(get_provider_registry)
     return {"processes": registry.active_processes()}
 
 
+@router.get("/providers/diagnostics")
+def provider_diagnostics(registry: ProviderRegistry = Depends(get_provider_registry)) -> dict:
+    return registry.diagnostics()
+
+
 @router.post("/processes/{agent_id}/kill")
 async def kill_agent_process(
     agent_id: str,
@@ -432,6 +510,35 @@ async def kill_processing(
 @router.get("/responses")
 def responses(limit: int = Query(default=20, ge=1, le=200), queue: QueueService = Depends(get_queue_service)) -> list[dict]:
     return queue.recent_responses(limit)
+
+
+@router.post("/responses")
+def enqueue_response(payload: dict[str, Any], queue: QueueService = Depends(get_queue_service)) -> dict:
+    channel = payload.get("channel")
+    sender = payload.get("sender")
+    message = payload.get("message")
+    if not channel or not sender or not message:
+        raise HTTPException(status_code=422, detail="channel, sender, and message are required")
+    response = queue.enqueue_response(
+        message_id=payload.get("messageId") or payload.get("message_id") or f"proactive-{int(time.time() * 1000)}",
+        channel=channel,
+        sender=sender,
+        sender_id=payload.get("senderId") or payload.get("sender_id"),
+        message=message,
+        original_message=payload.get("originalMessage") or payload.get("original_message") or "",
+        agent=payload.get("agent"),
+        files=payload.get("files") or [],
+        metadata=payload.get("metadata") or {"proactive": True},
+    )
+    return {"ok": True, "messageId": response.message_id, "responseId": response.id}
+
+
+@router.get("/responses/pending")
+def pending_responses(
+    channel: str = Query(...),
+    queue: QueueService = Depends(get_queue_service),
+) -> list[dict]:
+    return [queue._response_api_payload(response) for response in queue.get_responses_for_channel(channel)]
 
 
 @router.get("/responses/channel/{channel}")
@@ -545,12 +652,82 @@ def save_agent_system_prompt(
     return {"ok": True}
 
 
+@router.get("/agents/{agent_id}/workspace")
+def get_agent_workspace_status(agent_id: str, agents: AgentService = Depends(get_agent_service)) -> dict:
+    try:
+        return agents.workspace_status(agent_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.post("/agents/{agent_id}/workspace/repair")
+def repair_agent_workspace(agent_id: str, agents: AgentService = Depends(get_agent_service)) -> dict:
+    try:
+        return agents.workspace_status(agent_id, repair=True)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
 @router.get("/agents/{agent_id}/memory")
 def get_agent_memory(agent_id: str, agents: AgentService = Depends(get_agent_service)) -> dict:
     try:
         return agents.list_memory_files(agent_id)
     except KeyError as exc:
         raise not_found(exc) from exc
+
+
+@router.get("/agents/{agent_id}/memory/file")
+def get_agent_memory_file(
+    agent_id: str,
+    path: str = Query(...),
+    agents: AgentService = Depends(get_agent_service),
+) -> dict:
+    try:
+        return agents.get_memory_file(agent_id, path)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/agents/{agent_id}/memory/file")
+def save_agent_memory_file(
+    agent_id: str,
+    payload: dict[str, Any],
+    agents: AgentService = Depends(get_agent_service),
+) -> dict:
+    try:
+        return {"ok": True, **agents.save_memory_file(agent_id, payload.get("path") or "", payload.get("content") or "")}
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/agents/{agent_id}/memory/file")
+def delete_agent_memory_file(
+    agent_id: str,
+    path: str = Query(...),
+    agents: AgentService = Depends(get_agent_service),
+) -> dict:
+    try:
+        return agents.delete_memory_file(agent_id, path)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/agents/{agent_id}/heartbeat")
@@ -704,44 +881,51 @@ def list_schedules(
 @router.post("/schedules")
 def create_schedule(payload: dict[str, Any], schedules: ScheduleService = Depends(get_schedule_service)) -> dict:
     try:
-        schedule = schedules.create(
-            ScheduleCreate(
-                label=payload.get("label"),
-                cron=payload.get("cron") or "",
-                run_at=payload.get("runAt") or payload.get("run_at"),
-                agent_id=payload.get("agentId") or payload.get("agent_id"),
-                message=payload.get("message") or "",
-                channel=payload.get("channel") or "web",
-                sender=payload.get("sender") or "Web",
-                enabled=payload.get("enabled", True),
-            )
-        )
+        schedule = schedules.create(_schedule_create_payload(payload))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"ok": True, "schedule": _schedule_payload_with_status(schedule, schedules)}
+
+
+@router.post("/schedules/validate")
+def validate_schedule(payload: dict[str, Any], schedules: ScheduleService = Depends(get_schedule_service)) -> dict:
+    try:
+        return schedules.validate(_schedule_create_payload(payload))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @router.put("/schedules/{schedule_id}")
 def update_schedule(schedule_id: str, payload: dict[str, Any], schedules: ScheduleService = Depends(get_schedule_service)) -> dict:
     try:
-        schedule = schedules.update(
-            schedule_id,
-            ScheduleCreate(
-                label=payload.get("label"),
-                cron=payload.get("cron") or "",
-                run_at=payload.get("runAt") or payload.get("run_at"),
-                agent_id=payload.get("agentId") or payload.get("agent_id"),
-                message=payload.get("message") or "",
-                channel=payload.get("channel") or "web",
-                sender=payload.get("sender") or "Web",
-                enabled=payload.get("enabled", True),
-            ),
-        )
+        schedule = schedules.update(schedule_id, _schedule_create_payload(payload))
     except KeyError as exc:
         raise not_found(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"ok": True, "schedule": _schedule_payload_with_status(schedule, schedules)}
+
+
+@router.post("/schedules/{schedule_id}/fire")
+def fire_schedule(
+    schedule_id: str,
+    payload: dict[str, Any] | None = None,
+    schedules: ScheduleService = Depends(get_schedule_service),
+    queue: QueueService = Depends(get_queue_service),
+) -> dict:
+    try:
+        message = schedules.fire(schedule_id, queue, force=bool((payload or {}).get("force", False)))
+        schedule = schedules.get(schedule_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "messageId": message.id,
+        "message": message.model_dump(by_alias=True),
+        "schedule": _schedule_payload_with_status(schedule, schedules),
+    }
 
 
 @router.delete("/schedules/{schedule_id}")
@@ -773,6 +957,31 @@ def system_status(
 @router.get("/heartbeat/status")
 def heartbeat_status(heartbeat: HeartbeatService = Depends(get_heartbeat_service)) -> dict:
     return heartbeat.snapshot()
+
+
+@router.post("/heartbeat/tick")
+def heartbeat_tick(
+    payload: dict[str, Any] | None = None,
+    heartbeat: HeartbeatService = Depends(get_heartbeat_service),
+    queue: QueueService = Depends(get_queue_service),
+) -> dict:
+    payload = payload or {}
+    try:
+        return heartbeat.tick(
+            queue,
+            agent_id=payload.get("agentId") or payload.get("agent_id"),
+            force=bool(payload.get("force", False)),
+        )
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.delete("/heartbeat/state")
+def clear_heartbeat_state(
+    agent: str | None = Query(default=None),
+    heartbeat: HeartbeatService = Depends(get_heartbeat_service),
+) -> dict:
+    return {"ok": True, "cleared": heartbeat.clear_state(agent)}
 
 
 @router.get("/worker/status")

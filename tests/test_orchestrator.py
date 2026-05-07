@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -14,6 +15,7 @@ from pocketStudio.services.event_service import EventService
 from pocketStudio.services.orchestrator import Orchestrator
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
+from pocketStudio.services.team_routing import convert_tags_to_readable, extract_bracket_tags, strip_bracket_tags
 
 
 def temp_home() -> Path:
@@ -107,6 +109,16 @@ def test_team_bracket_parser_handles_nested_brackets_and_strips_tags() -> None:
     assert "fix arr" not in stripped
 
 
+def test_team_routing_converts_tags_to_readable_text() -> None:
+    text = "Plan [@coder,reviewer: fix arr[0]] and [#dev: update [phase-1] board]"
+    tags = extract_bracket_tags(text, "@")
+
+    assert tags[0].id == "coder,reviewer"
+    assert tags[0].message == "fix arr[0]"
+    assert strip_bracket_tags(text, "@") == "Plan  and [#dev: update [phase-1] board]"
+    assert convert_tags_to_readable(text, "lead") == "Plan @lead -> @coder,reviewer: fix arr[0] and #dev: update [phase-1] board"
+
+
 def test_team_mentions_support_multiple_teammates_and_dedupe() -> None:
     home = temp_home()
     try:
@@ -194,6 +206,92 @@ def test_chatroom_broadcast_enqueues_messages_for_teammates() -> None:
         assert all(item.metadata["parentMessageId"] == str(message.id) for item in chatroom_messages)
         assert all(item.metadata["channel"] == "discord" for item in chatroom_messages)
         assert all(item.metadata["senderId"] == "user-123" for item in chatroom_messages)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_direct_agent_response_can_route_team_mentions_and_chatrooms() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        orchestrator.agents.create(AgentCreate(id="lead", name="Lead", role="Leads"))
+        orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes"))
+        orchestrator.agents.create(AgentCreate(id="reviewer", name="Reviewer", role="Reviews"))
+        orchestrator.teams.create(
+            TeamCreate(id="dev", name="Dev", mode=TeamMode.chain, agent_ids=["lead", "coder", "reviewer"])
+        )
+
+        message = orchestrator.enqueue(
+            MessageCreate(
+                target="@agent:lead",
+                content="Status [@CODER,reviewer: inspect queue[0]] [#DEV: standup note]",
+                sender="Tester",
+                metadata={"channel": "web", "senderId": "tester-1"},
+            )
+        )
+        result = asyncio.run(orchestrator.process_message(message.id))
+        queued = orchestrator.queue.list(status=MessageStatus.queued)
+        chat = orchestrator.chat.list("dev")
+
+        mention_targets = {item.target for item in queued if item.sender == "team:dev:lead"}
+        chatroom_targets = {item.target for item in queued if item.sender == "chatroom:dev:lead"}
+        assert result.runs[0].agent_id == "lead"
+        assert mention_targets == {"@agent:coder", "@agent:reviewer"}
+        assert chatroom_targets == {"@agent:coder", "@agent:reviewer"}
+        assert any(message.sender == "lead" and message.message == "standup note" for message in chat)
+        assert all(item.metadata["parentMessageId"] == str(message.id) for item in queued)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_queue_can_group_consecutive_chatroom_messages() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        first = orchestrator.queue.enqueue(
+            MessageCreate(
+                target="@agent:coder",
+                content="[Chat room #dev - @lead]:\nfirst",
+                sender="chatroom:dev:lead",
+                metadata={"kind": "chatroom"},
+            )
+        )
+        second = orchestrator.queue.enqueue(
+            MessageCreate(
+                target="@agent:reviewer",
+                content="[Chat room #dev - @lead]:\nsecond",
+                sender="chatroom:dev:lead",
+                metadata={"kind": "chatroom"},
+            )
+        )
+        third = orchestrator.queue.enqueue(MessageCreate(target="@agent:lead", content="regular", sender="api"))
+
+        grouped = orchestrator.queue.grouped_chatroom_messages()
+
+        assert grouped["messageIds"] == [[first.id, second.id], [third.id]]
+        assert grouped["messages"][0]["content"] == f"{first.content}\n\n{second.content}"
+        assert grouped["messages"][0]["metadata"]["groupedMessageIds"] == [first.id, second.id]
+        assert grouped["messages"][0]["metadata"]["groupedCount"] == 2
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_team_response_projection_converts_internal_tags_for_responses() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        message = orchestrator.enqueue(MessageCreate(target="@agent:lead", content="hello", sender="Tester"))
+        result = {
+            "message_id": message.id,
+            "target": message.target,
+            "runs": [{"agent_id": "lead", "input": "hello", "output": "Plan [@coder: do work] [#dev: note]"}],
+            "output": "Plan [@coder: do work] [#dev: note]",
+        }
+        completed = orchestrator.queue.mark_done(message.id, json.dumps(result))
+        responses = orchestrator.queue.enqueue_responses_from_message(completed)
+
+        assert responses[0].message == "Plan @lead -> @coder: do work #dev: note"
+        assert responses[0].metadata["teamTagsConverted"] is True
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

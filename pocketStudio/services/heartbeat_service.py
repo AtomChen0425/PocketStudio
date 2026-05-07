@@ -33,29 +33,41 @@ class HeartbeatService:
         now_ms = now_ms or int(time.time() * 1000)
         fired: list[QueueMessage] = []
         for agent in self.agents.list():
-            if not agent.enabled or not agent.heartbeat_enabled:
+            if not self._is_due(agent, now_ms):
                 continue
-            interval_seconds = agent.heartbeat_interval or self.settings.heartbeat_interval_seconds
-            interval_ms = max(10, interval_seconds) * 1000
-            state = self.db.fetch_one("SELECT * FROM heartbeat_state WHERE agent_id = ?", (agent.id,))
-            last_sent_at = state["last_sent_at"] if state else None
-            if last_sent_at is not None and now_ms - last_sent_at < interval_ms:
-                continue
-            prompt = self._read_prompt(agent.workspace)
-            message = queue.enqueue(MessageCreate(target=f"@agent:{agent.id}", content=prompt, sender="System"))
-            self.db.execute(
-                """
-                INSERT INTO heartbeat_state (agent_id, last_sent_at, last_message_id)
-                VALUES (?, ?, ?)
-                ON CONFLICT(agent_id) DO UPDATE SET
-                  last_sent_at = excluded.last_sent_at,
-                  last_message_id = excluded.last_message_id
-                """,
-                (agent.id, now_ms, message.id),
-            )
-            self.events.emit("heartbeat.queued", {"agent_id": agent.id, "message_id": message.id})
-            fired.append(message)
+            fired.append(self._fire_agent(queue, agent, now_ms))
         return fired
+
+    def tick(
+        self,
+        queue: QueueService,
+        now_ms: int | None = None,
+        agent_id: str | None = None,
+        force: bool = False,
+    ) -> dict:
+        now_ms = now_ms or int(time.time() * 1000)
+        fired: list[QueueMessage] = []
+        if agent_id:
+            agent = self.agents.get(agent_id)
+            if force or self._is_due(agent, now_ms):
+                fired.append(self._fire_agent(queue, agent, now_ms))
+        else:
+            fired = self.fire_due(queue, now_ms)
+        return {
+            "ok": True,
+            "queued": len(fired),
+            "messageIds": [message.id for message in fired],
+            "heartbeat": self.snapshot(now_ms),
+        }
+
+    def clear_state(self, agent_id: str | None = None) -> int:
+        if agent_id:
+            cursor = self.db.execute("DELETE FROM heartbeat_state WHERE agent_id = ?", (agent_id,))
+        else:
+            cursor = self.db.execute("DELETE FROM heartbeat_state")
+        count = cursor.rowcount if cursor.rowcount is not None else 0
+        self.events.emit("heartbeat.state_cleared", {"agent_id": agent_id, "count": count})
+        return count
 
     def snapshot(self, now_ms: int | None = None) -> dict:
         rows = self.db.fetch_all("SELECT * FROM heartbeat_state ORDER BY agent_id")
@@ -78,13 +90,58 @@ class HeartbeatService:
                 "dueInMs": max(0, next_due_at - now_ms) if enabled else None,
                 "due": bool(enabled and next_due_at <= now_ms),
             }
+        due_count = sum(1 for data in agents.values() if data["due"])
+        enabled_count = sum(1 for data in agents.values() if data["enabled"])
         return {
             "running": self.settings.heartbeat_enabled,
             "interval": self.settings.heartbeat_interval_seconds,
+            "baseInterval": self.base_interval_seconds(),
+            "enabledCount": enabled_count,
+            "dueCount": due_count,
             "lastSent": {row["agent_id"]: row["last_sent_at"] for row in rows},
             "lastMessageIds": {row["agent_id"]: row["last_message_id"] for row in rows},
             "agents": agents,
         }
+
+    def base_interval_seconds(self) -> int:
+        interval = self.settings.heartbeat_interval_seconds
+        for agent in self.agents.list():
+            override = agent.heartbeat_interval
+            if override and override > 0 and override < interval:
+                interval = override
+        return max(10, interval)
+
+    def _is_due(self, agent, now_ms: int) -> bool:
+        if not self.settings.heartbeat_enabled or not agent.enabled or not agent.heartbeat_enabled:
+            return False
+        interval_seconds = agent.heartbeat_interval or self.settings.heartbeat_interval_seconds
+        interval_ms = max(10, interval_seconds) * 1000
+        state = self.db.fetch_one("SELECT * FROM heartbeat_state WHERE agent_id = ?", (agent.id,))
+        last_sent_at = state["last_sent_at"] if state else None
+        return last_sent_at is None or now_ms - last_sent_at >= interval_ms
+
+    def _fire_agent(self, queue: QueueService, agent, now_ms: int) -> QueueMessage:
+        prompt = self._read_prompt(agent.workspace)
+        message = queue.enqueue(
+            MessageCreate(
+                target=f"@agent:{agent.id}",
+                content=prompt,
+                sender="System",
+                metadata={"channel": "heartbeat", "agent": agent.id},
+            )
+        )
+        self.db.execute(
+            """
+            INSERT INTO heartbeat_state (agent_id, last_sent_at, last_message_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(agent_id) DO UPDATE SET
+              last_sent_at = excluded.last_sent_at,
+              last_message_id = excluded.last_message_id
+            """,
+            (agent.id, now_ms, message.id),
+        )
+        self.events.emit("heartbeat.queued", {"agent_id": agent.id, "message_id": message.id})
+        return message
 
     @staticmethod
     def _read_prompt(workspace: Path) -> str:

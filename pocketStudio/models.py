@@ -193,6 +193,11 @@ class QueueStatus(BaseModel):
     processing: int
     outgoing: int
     activeConversations: int
+    pending: int = 0
+    completed: int = 0
+    dead: int = 0
+    failed: int = 0
+    responsesPending: int = 0
 
 
 class ResponseJob(BaseModel):

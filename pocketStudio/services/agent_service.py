@@ -100,6 +100,22 @@ class AgentService:
         if not soul.exists():
             soul.write_text(f"# {payload.name if payload else 'Agent'}\n\nDefine this agent's operating principles here.\n", encoding="utf-8")
 
+    def workspace_status(self, agent_id: str, repair: bool = False) -> dict:
+        agent = self.get(agent_id)
+        before = self._workspace_checks(agent.workspace)
+        repaired = [item["path"] for item in before if not item["ok"]]
+        if repair and repaired:
+            self.ensure_workspace(agent.workspace, agent)
+        after = self._workspace_checks(agent.workspace)
+        return {
+            "ok": all(item["ok"] for item in after),
+            "agentId": agent.id,
+            "workspace": str(agent.workspace),
+            "repaired": repaired if repair else [],
+            "checks": after,
+            "before": before if repair else None,
+        }
+
     def get_system_prompt_file(self, agent_id: str) -> dict:
         agent = self.get(agent_id)
         path = agent.workspace / "AGENTS.md"
@@ -192,6 +208,43 @@ class AgentService:
             "memoryDir": str(memory_dir),
         }
 
+    def get_memory_file(self, agent_id: str, relative_path: str) -> dict:
+        agent = self.get(agent_id)
+        memory_dir = agent.workspace / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        path = self._resolve_memory_path(memory_dir, relative_path)
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"Memory file '{relative_path}' not found")
+        content = path.read_text(encoding="utf-8")
+        return {
+            "path": str(path),
+            "relativePath": path.relative_to(memory_dir.resolve()).as_posix(),
+            "content": content,
+            "frontmatter": self._parse_frontmatter(content),
+        }
+
+    def save_memory_file(self, agent_id: str, relative_path: str, content: str, create_dirs: bool = True) -> dict:
+        agent = self.get(agent_id)
+        memory_dir = agent.workspace / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        path = self._resolve_memory_path(memory_dir, relative_path)
+        if create_dirs:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        elif not path.parent.exists():
+            raise FileNotFoundError(f"Memory folder '{path.parent.relative_to(memory_dir.resolve()).as_posix()}' not found")
+        path.write_text(content, encoding="utf-8")
+        return self.get_memory_file(agent_id, path.relative_to(memory_dir.resolve()).as_posix())
+
+    def delete_memory_file(self, agent_id: str, relative_path: str) -> dict:
+        agent = self.get(agent_id)
+        memory_dir = agent.workspace / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        path = self._resolve_memory_path(memory_dir, relative_path)
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"Memory file '{relative_path}' not found")
+        path.unlink()
+        return {"ok": True, "relativePath": path.relative_to(memory_dir.resolve()).as_posix()}
+
     def list_skills(self, agent_id: str) -> list[dict]:
         agent = self.get(agent_id)
         skills_dir = agent.workspace / ".agents" / "skills"
@@ -273,8 +326,48 @@ class AgentService:
             target.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
+    def _workspace_checks(workspace: Path) -> list[dict]:
+        checks = [
+            ("directory", workspace),
+            ("directory", workspace / ".pocketStudio"),
+            ("directory", workspace / ".agents" / "skills"),
+            ("directory", workspace / ".claude"),
+            ("directory", workspace / "memory"),
+            ("file", workspace / "AGENTS.md"),
+            ("file", workspace / "heartbeat.md"),
+            ("file", workspace / ".pocketStudio" / "SOUL.md"),
+            ("skillsLink", workspace / ".claude" / "skills"),
+        ]
+        result = []
+        for kind, path in checks:
+            if kind == "directory":
+                ok = path.is_dir()
+            elif kind == "file":
+                ok = path.is_file()
+            else:
+                ok = path.is_symlink() or path.is_dir()
+            result.append({"path": str(path), "relativePath": path.relative_to(workspace).as_posix() if path != workspace else ".", "kind": kind, "ok": ok})
+        return result
+
+    @staticmethod
     def _safe_name(value: str) -> str:
         return re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-").lower() or "skill"
+
+    @staticmethod
+    def _resolve_memory_path(memory_dir: Path, relative_path: str) -> Path:
+        if not relative_path or not isinstance(relative_path, str):
+            raise ValueError("memory path is required")
+        normalized = relative_path.replace("\\", "/").strip("/")
+        parts = Path(normalized).parts
+        if not normalized.endswith(".md"):
+            raise ValueError("memory path must end with .md")
+        if any(part in {"", ".", ".."} or part.startswith(".") for part in parts):
+            raise ValueError("memory path must stay inside memory/ and cannot include hidden path segments")
+        root = memory_dir.resolve()
+        path = (memory_dir / normalized).resolve()
+        if root != path and root not in path.parents:
+            raise ValueError("memory path must stay inside memory/")
+        return path
 
     @staticmethod
     def _parse_frontmatter(content: str) -> dict | None:

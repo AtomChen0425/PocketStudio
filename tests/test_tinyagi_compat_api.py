@@ -100,7 +100,7 @@ def test_projects_comments_and_schedules() -> None:
 
     schedule_response = client.post(
         "/api/schedules",
-        json={"agentId": agent_id, "message": "daily check", "cron": "0 9 * * *", "label": "Daily check"},
+        json={"agentId": agent_id, "message": "daily check", "cron": "0 9 * * *", "label": unique("Daily check")},
     )
     assert schedule_response.status_code == 200
     schedule = schedule_response.json()["schedule"]
@@ -255,6 +255,40 @@ def test_settings_import_rejects_invalid_payload_without_writing() -> None:
     assert "channels.enabled" in response.json()["detail"]
     after = client.get("/api/settings").json()
     assert after["channels"] == before["channels"]
+
+
+def test_settings_import_rejects_invalid_runtime_sections_before_writing() -> None:
+    client = TestClient(app)
+    before = client.get("/api/settings").json()
+    original_name = before["workspace"]["name"]
+    attempted_name = unique("should-not-write")
+
+    response = client.post(
+        "/api/settings/import",
+        json={
+            "settings": {
+                "workspace": {"name": attempted_name},
+                "agents": {
+                    "bad id with spaces": {
+                        "name": "Bad Agent",
+                        "provider": "local",
+                    }
+                },
+            }
+        },
+    )
+    validate = client.post(
+        "/api/settings/validate",
+        json={"settings": {"teams": {"bad team": {"name": "Bad Team", "maxRounds": 99}}}},
+    )
+    after = client.get("/api/settings").json()
+    file_settings = json.loads(get_settings().settings_path.read_text(encoding="utf-8"))
+
+    assert response.status_code == 422
+    assert "bad id with spaces" in response.json()["detail"] or "String should match pattern" in response.json()["detail"]
+    assert validate.status_code == 422
+    assert after["workspace"]["name"] == original_name
+    assert file_settings["workspace"]["name"] != attempted_name
 
 
 def test_settings_validate_reports_validity_without_writing() -> None:

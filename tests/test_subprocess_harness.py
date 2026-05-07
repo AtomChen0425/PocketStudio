@@ -1,5 +1,6 @@
 import asyncio
 import shutil
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -107,6 +108,40 @@ def test_subprocess_harness_falls_back_to_powershell_when_command_is_missing_on_
     assert calls["args"][5] == "codex exec --json -"
 
 
+def test_subprocess_harness_uses_sync_fallback_when_async_windows_pipes_are_denied(monkeypatch) -> None:
+    calls = {}
+    events = []
+
+    async def fake_exec(*args, **kwargs):
+        raise PermissionError("denied")
+
+    def fake_run(args, **kwargs):
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout='{"result":"sync output"}\n', stderr="")
+
+    monkeypatch.setattr("pocketStudio.providers.subprocess.os.name", "nt")
+    monkeypatch.setattr("pocketStudio.providers.subprocess.shutil.which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr("pocketStudio.providers.subprocess.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("pocketStudio.providers.subprocess.subprocess.run", fake_run)
+
+    result = asyncio.run(
+        SubprocessHarness("codex").run(
+            ["exec", "--json", "-"],
+            process_key="agent",
+            stdin_text="hello",
+            on_stdout_line=events.append,
+        )
+    )
+
+    assert result.stdout == '{"result":"sync output"}\n'
+    assert result.process["syncFallback"] is True
+    assert events == ['{"result":"sync output"}']
+    assert calls["args"][:5] == ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+    assert calls["args"][5] == "codex exec --json -"
+    assert calls["kwargs"]["input"] == "hello"
+
+
 def test_codex_provider_builds_args_and_parses_jsonl() -> None:
     class FakeHarness:
         def __init__(self) -> None:
@@ -206,11 +241,13 @@ def test_codex_provider_includes_context_and_supports_custom_command_line() -> N
 def test_codex_provider_reads_env_command_args(monkeypatch) -> None:
     monkeypatch.setenv("POCKETSTUDIO_CODEX_COMMAND", "codex-env")
     monkeypatch.setenv("POCKETSTUDIO_CODEX_ARGS", "exec --json {prompt}")
+    monkeypatch.setenv("POCKETSTUDIO_CODEX_HOME", str(Path.cwd() / ".codex-test"))
 
     provider = CodexProvider()
 
     assert provider.command == "codex-env"
     assert provider.base_args == ["exec", "--json", "{prompt}"]
+    assert provider._env() == {"CODEX_HOME": str(Path.cwd() / ".codex-test")}
 
 
 def test_cli_agent_providers_build_args_and_parse_output() -> None:
@@ -253,6 +290,10 @@ def test_provider_registry_exposes_core_harnesses() -> None:
 
     assert {"local", "openai", "codex", "claude", "opencode"} <= set(registry.list_names())
     assert isinstance(registry.get("opencode"), OpenCodeProvider)
+    diagnostics = registry.diagnostics()
+    provider_names = {provider["name"] for provider in diagnostics["providers"]}
+    assert {"openai", "codex", "claude"} <= provider_names
+    assert "windowsPowerShellFallback" in diagnostics
 
 
 def test_provider_registry_builds_custom_codex_command_from_provider_config() -> None:

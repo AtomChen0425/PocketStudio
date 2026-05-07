@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import shutil
+import uuid
+import os
+from pathlib import Path
+
 from pocketStudio.core.database import Database
 from pocketStudio.providers.base import AgentProvider
 from pocketStudio.providers.cli_agent import ClaudeProvider, OpenCodeProvider, provider_from_command
@@ -10,16 +15,20 @@ from pocketStudio.providers.subprocess import ProcessRegistry
 
 
 class ProviderRegistry:
-    BUILTIN_PROVIDERS = {"local", "openai", "codex", "anthropic", "opencode"}
+    BUILTIN_PROVIDERS = {"local", "openai", "codex", "anthropic", "claude", "opencode"}
 
     def __init__(self, db: Database | None = None) -> None:
         self.db = db
         self.processes = ProcessRegistry()
         self._manual_provider_names: set[str] = set()
+        codex_provider = CodexProvider(registry=self.processes)
+        claude_provider = ClaudeProvider(registry=self.processes)
         self._providers: dict[str, AgentProvider] = {
             "local": LocalEchoProvider(),
-            "openai": CodexProvider(registry=self.processes),
-            "anthropic": ClaudeProvider(registry=self.processes),
+            "openai": codex_provider,
+            "codex": codex_provider,
+            "anthropic": claude_provider,
+            "claude": claude_provider,
             "opencode": OpenCodeProvider(registry=self.processes),
         }
         self.reload_custom()
@@ -91,3 +100,51 @@ class ProviderRegistry:
 
     def active_processes(self) -> list[dict]:
         return self.processes.snapshot()
+
+    def diagnostics(self) -> dict:
+        providers = []
+        for name in self.list_names():
+            provider = self._providers[name]
+            command = getattr(provider, "command", None)
+            provider_info = {
+                "name": name,
+                "class": provider.__class__.__name__,
+                "builtin": name in self.BUILTIN_PROVIDERS,
+                "command": command,
+                "resolvedPath": shutil.which(command) if command else None,
+                "baseArgs": list(getattr(provider, "base_args", []) or []),
+            }
+            if command == "codex":
+                provider_info["codexHome"] = _codex_home_diagnostics()
+            provider_info["available"] = bool(provider_info["resolvedPath"]) if command else True
+            providers.append(provider_info)
+        return {
+            "providers": providers,
+            "activeProcesses": self.active_processes(),
+            "windowsPowerShellFallback": bool(shutil.which("powershell.exe") or shutil.which("powershell")),
+        }
+
+
+def _codex_home_diagnostics() -> dict:
+    codex_home = Path(os.getenv("POCKETSTUDIO_CODEX_HOME") or Path.home() / ".codex")
+    sessions_dir = codex_home / "sessions"
+    return {
+        "path": str(codex_home),
+        "exists": codex_home.exists(),
+        "writable": _can_write(codex_home),
+        "sessionsPath": str(sessions_dir),
+        "sessionsExists": sessions_dir.exists(),
+        "sessionsWritable": _can_write(sessions_dir),
+    }
+
+
+def _can_write(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+    probe = path / f".pocketstudio-write-test-{uuid.uuid4().hex}.tmp"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False

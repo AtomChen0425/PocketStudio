@@ -64,6 +64,42 @@ def test_prune_completed_messages() -> None:
         assert client.get(f"/api/queue/{message_id}").status_code == 404
 
 
+def test_proactive_response_endpoint_and_pending_channel_projection() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/responses",
+            json={
+                "channel": "web",
+                "sender": "Tester",
+                "senderId": "tester-1",
+                "message": "Proactive hello",
+                "agent": "system",
+                "files": ["note.md"],
+                "metadata": {"source": "test"},
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["messageId"].startswith("proactive-")
+        assert payload["responseId"]
+
+        pending = client.get("/api/responses/pending?channel=web")
+        assert pending.status_code == 200
+        item = next(item for item in pending.json() if item["id"] == payload["responseId"])
+        assert item["message"] == "Proactive hello"
+        assert item["senderId"] == "tester-1"
+        assert item["agent"] == "system"
+        assert item["files"] == ["note.md"]
+        assert item["metadata"]["source"] == "test"
+
+        office_events = client.get("/api/events/office?limit=500")
+        assert office_events.status_code == 200
+        mapped = [event for event in office_events.json() if event["event"] == "response:queued"]
+        assert any(event["data"]["responseId"] == payload["responseId"] for event in mapped)
+
+
 def test_response_service_collects_files_and_saves_long_responses() -> None:
     home = Path(".pytest-local") / f"response-home-{uuid.uuid4().hex[:8]}"
     attachment = home / "attachment.txt"

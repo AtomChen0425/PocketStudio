@@ -217,6 +217,8 @@ def build_parser() -> argparse.ArgumentParser:
     import_settings.add_argument("path")
     validate_settings = settings_sub.add_parser("validate")
     validate_settings.add_argument("path")
+    preview_settings = settings_sub.add_parser("preview")
+    preview_settings.add_argument("path")
 
     send = sub.add_parser("send", help="Send a message")
     send.add_argument("message")
@@ -228,6 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue = sub.add_parser("queue", help="Queue operations")
     queue_sub = queue.add_subparsers(dest="queue_command", required=True)
     queue_sub.add_parser("status")
+    queue_sub.add_parser("diagnostics")
     queue_sub.add_parser("dead")
     retry = queue_sub.add_parser("retry")
     retry.add_argument("message_id", type=int)
@@ -249,6 +252,15 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance.add_argument("--stale-threshold-seconds", type=int)
     maintenance.add_argument("--prune-chats", action="store_true")
 
+    heartbeat = sub.add_parser("heartbeat", help="Heartbeat operations")
+    heartbeat_sub = heartbeat.add_subparsers(dest="heartbeat_command", required=True)
+    heartbeat_sub.add_parser("status")
+    heartbeat_tick = heartbeat_sub.add_parser("tick")
+    heartbeat_tick.add_argument("--agent")
+    heartbeat_tick.add_argument("--force", action="store_true")
+    heartbeat_clear = heartbeat_sub.add_parser("clear")
+    heartbeat_clear.add_argument("--agent")
+
     agent = sub.add_parser("agent", help="Agent operations")
     agent_sub = agent.add_subparsers(dest="agent_command", required=True)
     agent_sub.add_parser("list")
@@ -261,6 +273,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_agent.add_argument("--workspace")
     show_agent = agent_sub.add_parser("show")
     show_agent.add_argument("id")
+    workspace_agent = agent_sub.add_parser("workspace")
+    workspace_agent.add_argument("id")
+    repair_workspace_agent = agent_sub.add_parser("repair-workspace")
+    repair_workspace_agent.add_argument("id")
     remove_agent = agent_sub.add_parser("remove")
     remove_agent.add_argument("id")
     reset_agent = agent_sub.add_parser("reset")
@@ -316,6 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_schedule.add_argument("--label")
     remove_schedule = schedule_sub.add_parser("remove")
     remove_schedule.add_argument("id")
+    fire_schedule = schedule_sub.add_parser("fire")
+    fire_schedule.add_argument("id")
+    fire_schedule.add_argument("--force", action="store_true")
 
     pairing = sub.add_parser("pairing", help="Pairing operations")
     pairing_sub = pairing.add_subparsers(dest="pairing_command", required=True)
@@ -404,6 +423,8 @@ def run(args: argparse.Namespace, client: ApiClient) -> int:
     if args.command == "queue":
         if args.queue_command == "status":
             return print_json(client.get("/api/queue/status"))
+        if args.queue_command == "diagnostics":
+            return print_json(client.get("/api/queue/diagnostics"))
         if args.queue_command == "dead":
             return print_json(client.get("/api/queue/dead"))
         if args.queue_command == "retry":
@@ -426,6 +447,14 @@ def run(args: argparse.Namespace, client: ApiClient) -> int:
                 params.append("prune_chats=true")
             return print_json(client.post(f"/api/worker/maintenance?{'&'.join(params)}", {}))
         return print_json(client.post(f"/api/worker/{args.worker_command}", {}))
+    if args.command == "heartbeat":
+        if args.heartbeat_command == "status":
+            return print_json(client.get("/api/heartbeat/status"))
+        if args.heartbeat_command == "tick":
+            return print_json(client.post("/api/heartbeat/tick", {"agentId": args.agent, "force": args.force}))
+        if args.heartbeat_command == "clear":
+            suffix = f"?agent={quote(args.agent)}" if args.agent else ""
+            return print_json(client.delete(f"/api/heartbeat/state{suffix}"))
     if args.command == "agent":
         return run_agent(args, client)
     if args.command == "team":
@@ -448,6 +477,10 @@ def run_agent(args: argparse.Namespace, client: ApiClient) -> int:
         return print_json(client.get("/api/agents"))
     if args.agent_command == "show":
         return print_json(client.get(f"/api/agents/{args.id}"))
+    if args.agent_command == "workspace":
+        return print_json(client.get(f"/api/agents/{args.id}/workspace"))
+    if args.agent_command == "repair-workspace":
+        return print_json(client.post(f"/api/agents/{args.id}/workspace/repair", {}))
     if args.agent_command == "add":
         payload = {
             "id": args.id,
@@ -482,6 +515,9 @@ def run_settings(args: argparse.Namespace, client: ApiClient) -> int:
     if args.settings_command == "validate":
         payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
         return print_json(client.post("/api/settings/validate", {"settings": payload}))
+    if args.settings_command == "preview":
+        payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
+        return print_json(client.post("/api/settings/preview", {"settings": payload}))
     raise SystemExit(f"Unknown settings command: {args.settings_command}")
 
 
@@ -550,6 +586,8 @@ def run_schedule(args: argparse.Namespace, client: ApiClient) -> int:
         return print_json(client.post("/api/schedules", payload))
     if args.schedule_command == "remove":
         return print_json(client.delete(f"/api/schedules/{args.id}"))
+    if args.schedule_command == "fire":
+        return print_json(client.post(f"/api/schedules/{args.id}/fire", {"force": args.force}))
     raise SystemExit(f"Unknown schedule command: {args.schedule_command}")
 
 

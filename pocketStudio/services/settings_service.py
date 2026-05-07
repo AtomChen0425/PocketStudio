@@ -40,6 +40,17 @@ class SettingsService:
         self.write(next_settings)
         return self.snapshot()
 
+    def preview_update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.validate(payload)
+        current = self.snapshot()
+        next_settings = self._merge(current, payload)
+        return {
+            "ok": True,
+            "changed": current != next_settings,
+            "changes": self._diff(current, next_settings),
+            "settings": next_settings,
+        }
+
     def validate(self, payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
             raise SettingsValidationError("settings payload must be an object")
@@ -188,6 +199,23 @@ class SettingsService:
                 merged[key] = cls._merge(merged.get(key), value)
             return merged
         return update
+
+    @classmethod
+    def _diff(cls, current: Any, next_value: Any, prefix: str = "") -> list[dict[str, Any]]:
+        if isinstance(current, dict) and isinstance(next_value, dict):
+            changes: list[dict[str, Any]] = []
+            for key in sorted(set(current) | set(next_value)):
+                path = f"{prefix}.{key}" if prefix else key
+                if key not in current:
+                    changes.append({"path": path, "type": "added", "before": None, "after": next_value[key]})
+                elif key not in next_value:
+                    changes.append({"path": path, "type": "removed", "before": current[key], "after": None})
+                else:
+                    changes.extend(cls._diff(current[key], next_value[key], path))
+            return changes
+        if current != next_value:
+            return [{"path": prefix, "type": "changed", "before": current, "after": next_value}]
+        return []
 
     @staticmethod
     def _repair_json(raw: str) -> dict[str, Any] | None:

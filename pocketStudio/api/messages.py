@@ -41,6 +41,15 @@ def list_queue(
     return service.list(limit=limit, status=status)
 
 
+@router.get("/queue/grouped")
+def list_grouped_queue(
+    limit: int = Query(default=100, ge=1, le=500),
+    status: MessageStatus | None = None,
+    service: QueueService = Depends(get_queue_service),
+) -> dict:
+    return service.grouped_chatroom_messages(limit=limit, status=status)
+
+
 @router.get("/queue/{message_id}", response_model=QueueMessage)
 def get_message(message_id: int, service: QueueService = Depends(get_queue_service)) -> QueueMessage:
     try:

@@ -104,7 +104,12 @@ class SubprocessHarness:
         except OSError as exc:
             if os.name != "nt" or not _should_fallback_to_windows_powershell(exc):
                 raise
-            process = await self._run_windows_powershell(args, cwd, merged_env, stdin_text)
+            try:
+                process = await self._run_windows_powershell(args, cwd, merged_env, stdin_text)
+            except OSError as fallback_exc:
+                if not _should_fallback_to_windows_sync_subprocess(fallback_exc):
+                    raise
+                return await self._run_windows_powershell_sync(args, cwd, merged_env, on_stdout_line, stdin_text)
         self.registry.register(
             process_key,
             process,
@@ -155,6 +160,57 @@ class SubprocessHarness:
             stderr=asyncio.subprocess.PIPE,
         )
 
+    async def _run_windows_powershell_sync(
+        self,
+        args: Sequence[str],
+        cwd: Path | str | None,
+        env: dict[str, str],
+        on_stdout_line: Callable[[str], None] | None,
+        stdin_text: str | None,
+    ) -> SubprocessResult:
+        command_args = [
+            _windows_powershell(),
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            subprocess.list2cmdline([self.command, *args]),
+        ]
+
+        def run_sync() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                command_args,
+                cwd=str(cwd) if cwd else None,
+                env=env,
+                input=stdin_text,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.timeout_seconds,
+            )
+
+        try:
+            completed = await asyncio.to_thread(run_sync)
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(f"Subprocess '{self.command}' timed out after {self.timeout_seconds}s") from exc
+        stdout = completed.stdout or ""
+        if on_stdout_line:
+            for line in stdout.splitlines():
+                on_stdout_line(line.rstrip("\r\n"))
+        return SubprocessResult(
+            stdout=stdout,
+            stderr=completed.stderr or "",
+            return_code=completed.returncode,
+            process={
+                "pid": None,
+                "command": self.command,
+                "args": list(args),
+                "cwd": str(cwd) if cwd else None,
+                "timedOut": False,
+                "syncFallback": True,
+            },
+        )
+
     @staticmethod
     async def _communicate(
         process: asyncio.subprocess.Process,
@@ -193,6 +249,10 @@ async def _empty_bytes() -> bytes:
 
 def _should_fallback_to_windows_powershell(exc: OSError) -> bool:
     return isinstance(exc, (FileNotFoundError, PermissionError)) or getattr(exc, "winerror", None) in {2, 5}
+
+
+def _should_fallback_to_windows_sync_subprocess(exc: OSError) -> bool:
+    return os.name == "nt" and _should_fallback_to_windows_powershell(exc)
 
 
 def _windows_powershell() -> str:

@@ -111,7 +111,8 @@ class WorkerService:
             return True
 
     def snapshot(self) -> dict:
-        queue_status = self.orchestrator.queue.status().model_dump()
+        queue_diagnostics = self.orchestrator.queue.diagnostics()
+        queue_status = queue_diagnostics["status"]
         return {
             "running": self.state.running,
             "paused": self.state.paused,
@@ -124,6 +125,7 @@ class WorkerService:
             "lastError": self.state.last_error,
             "pollInterval": self.settings.worker_poll_interval,
             "queue": queue_status,
+            "queueDiagnostics": queue_diagnostics,
         }
 
     def maintenance(

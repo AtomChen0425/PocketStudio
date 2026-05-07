@@ -53,6 +53,7 @@ def update_task_status(task_id: int, status: str, service: TaskService = Depends
         raise not_found(exc) from exc
 
 
-@router.delete("/{task_id}", status_code=204)
-def delete_task(task_id: int, service: TaskService = Depends(get_task_service)) -> None:
+@router.delete("/{task_id}")
+def delete_task(task_id: int, service: TaskService = Depends(get_task_service)) -> dict:
     service.delete(task_id)
+    return {"ok": True}

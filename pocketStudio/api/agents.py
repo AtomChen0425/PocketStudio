@@ -26,7 +26,7 @@ def get_agent(agent_id: str, service: AgentService = Depends(get_agent_service))
         raise not_found(exc) from exc
 
 
-@router.delete("/{agent_id}", status_code=204)
-def delete_agent(agent_id: str, service: AgentService = Depends(get_agent_service)) -> None:
+@router.delete("/{agent_id}")
+def delete_agent(agent_id: str, service: AgentService = Depends(get_agent_service)) -> dict:
     service.delete(agent_id)
-
+    return {"ok": True}

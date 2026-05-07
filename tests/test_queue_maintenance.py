@@ -27,11 +27,21 @@ def test_dead_letter_retry_delete_and_agent_status() -> None:
 
         dead_response = client.get("/api/queue/dead")
         assert dead_response.status_code == 200
-        assert any(item["id"] == message_id for item in dead_response.json())
+        dead_item = next(item for item in dead_response.json() if item["id"] == message_id)
+        assert dead_item["data"]["messageId"] == str(message_id)
+        assert dead_item["data"]["target"] == message_response.json()["target"]
+        assert dead_item["failedReason"]
+        assert dead_item["attemptsMade"] >= 1
+        assert dead_item["timestamp"] > 0
 
         agent_status = client.get("/api/queue/agents")
         assert agent_status.status_code == 200
         assert any(item["pending"] >= 0 for item in agent_status.json())
+
+        queue_status = client.get("/api/queue/status")
+        assert queue_status.status_code == 200
+        assert {"incoming", "queued", "processing", "completed", "dead", "failed", "outgoing", "responsesPending"} <= set(queue_status.json())
+        assert queue_status.json()["dead"] >= 1
 
         retry_response = client.post(f"/api/queue/dead/{message_id}/retry")
         assert retry_response.status_code == 200
@@ -127,3 +137,61 @@ def test_processing_payload_uses_running_timestamp_and_metadata() -> None:
     assert payload["senderId"] == "tester-1"
     assert payload["attempts"] == 2
     assert payload["duration"] >= 0
+
+
+def test_queue_diagnostics_reports_backlog_and_stale_processing() -> None:
+    settings = Settings(pocketStudio_home=Path(".pytest-local") / f"diagnostics-home-{uuid.uuid4().hex[:8]}")
+    db = Database(settings.database_path)
+    db.initialize()
+    queue = QueueService(db, EventService(db, settings), settings)
+    queued = queue.enqueue(
+        MessageCreate(
+            target="@agent:queued",
+            content="queued backlog",
+            sender="test",
+            metadata={"channel": "diagnostics"},
+        )
+    )
+    running = queue.enqueue(MessageCreate(target="@agent:runner", content="stale runner", sender="test"))
+    db.execute(
+        """
+        UPDATE messages
+        SET status = 'running', attempts = 1, updated_at = datetime('now', '-20 minutes')
+        WHERE id = ?
+        """,
+        (running.id,),
+    )
+
+    diagnostics = queue.diagnostics(stale_threshold_seconds=1)
+
+    assert diagnostics["status"]["queued"] >= 1
+    assert diagnostics["oldestQueued"]["id"] == queued.id
+    assert diagnostics["oldestQueued"]["channel"] == "diagnostics"
+    assert diagnostics["oldestQueuedAgeMs"] >= 0
+    assert diagnostics["oldestRunning"]["id"] == running.id
+    assert diagnostics["oldestRunningAgeMs"] >= 0
+    assert diagnostics["staleProcessing"] == 1
+    assert diagnostics["maxAttempts"] == settings.queue_max_attempts
+
+
+def test_queue_diagnostics_api_and_worker_snapshot_include_runtime_details() -> None:
+    agent_id = f"diagnostics-agent-{uuid.uuid4().hex[:8]}"
+
+    with TestClient(app) as client:
+        client.post("/api/worker/stop")
+        client.post("/api/agents", json={"id": agent_id, "name": "Diagnostics Agent", "role": "Reports queue state", "provider": "local"})
+        message_id = client.post(
+            "/api/messages",
+            json={"target": f"@agent:{agent_id}", "content": "inspect backlog", "sender": "test"},
+        ).json()["id"]
+
+        diagnostics = client.get("/api/queue/diagnostics?stale_threshold_seconds=1")
+        worker = client.get("/api/worker/status")
+
+        assert diagnostics.status_code == 200
+        assert diagnostics.json()["status"]["queued"] >= 1
+        assert diagnostics.json()["oldestQueued"]["id"] <= message_id
+        assert diagnostics.json()["oldestQueuedAgeMs"] >= 0
+        assert worker.status_code == 200
+        assert "queueDiagnostics" in worker.json()
+        assert worker.json()["queueDiagnostics"]["status"]["queued"] >= 1

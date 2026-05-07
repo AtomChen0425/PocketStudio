@@ -20,6 +20,7 @@ from pocketStudio.services.chat_service import ChatService
 from pocketStudio.services.event_service import EventService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
+from pocketStudio.services.team_routing import extract_bracket_tags, strip_bracket_tags
 
 
 class TeamActions:
@@ -78,6 +79,7 @@ class Orchestrator:
             )
             run = await self._run_agent(agent, message.content, [])
             self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
+            await self._handle_direct_agent_team_tags(agent, run, message)
             return OrchestrationResult(
                 message_id=message.id,
                 target=message.target,
@@ -175,14 +177,15 @@ class Orchestrator:
         return produced
 
     def _mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent]) -> list[tuple[str, str, str]]:
-        agent_ids = {agent.id for agent in agents}
+        agent_by_lookup = self._agent_lookup(agents)
         mentions: list[tuple[str, str, str]] = []
         for run in runs:
             shared_context = self._strip_tags(run.output, "@")
             seen: set[str] = set()
             for raw_ids, content in self._extract_tags(run.output, "@"):
-                for teammate_id in [item.strip() for item in raw_ids.split(",") if item.strip()]:
-                    if teammate_id in seen or teammate_id == run.agent_id or teammate_id not in agent_ids:
+                for candidate_id in self._split_candidate_ids(raw_ids):
+                    teammate_id = agent_by_lookup.get(candidate_id)
+                    if teammate_id is None or teammate_id in seen or teammate_id == run.agent_id:
                         continue
                     seen.add(teammate_id)
                     routed_content = f"{shared_context}\n\n------\n\nDirected to you:\n{content}" if shared_context else content
@@ -196,19 +199,22 @@ class Orchestrator:
         message: QueueMessage,
         agents: list[Agent],
         enqueue_mentions: bool = True,
+        process_chatrooms: bool = True,
     ) -> None:
-        agent_ids = {agent.id for agent in agents}
-        for team_id, content in self._extract_tags(run.output, "#"):
-            if team_id == team.id:
-                self.chat.post(team.id, ChatMessageCreate(sender=run.agent_id, message=content))
-                delivered = self._broadcast_chatroom(team, run.agent_id, content, agents, message)
-                self.events.emit("team.chatroom", {"team_id": team.id, "from_agent": run.agent_id, "delivered": delivered})
+        agent_by_lookup = self._agent_lookup(agents)
+        if process_chatrooms:
+            for team_id, content in self._extract_tags(run.output, "#"):
+                if team_id.lower() == team.id.lower():
+                    self.chat.post(team.id, ChatMessageCreate(sender=run.agent_id, message=content))
+                    delivered = self._broadcast_chatroom(team, run.agent_id, content, agents, message)
+                    self.events.emit("team.chatroom", {"team_id": team.id, "from_agent": run.agent_id, "delivered": delivered})
 
         shared_context = self._strip_tags(run.output, "@")
         seen_mentions: set[str] = set()
         for raw_ids, content in self._extract_tags(run.output, "@"):
-            for teammate_id in [item.strip() for item in raw_ids.split(",") if item.strip()]:
-                if teammate_id in seen_mentions or teammate_id == run.agent_id or teammate_id not in agent_ids:
+            for candidate_id in self._split_candidate_ids(raw_ids):
+                teammate_id = agent_by_lookup.get(candidate_id)
+                if teammate_id is None or teammate_id in seen_mentions or teammate_id == run.agent_id:
                     continue
                 seen_mentions.add(teammate_id)
                 if not enqueue_mentions:
@@ -232,6 +238,28 @@ class Orchestrator:
                     "agent.mention",
                     {"team_id": team.id, "from_agent": run.agent_id, "to_agent": teammate_id},
                 )
+
+    async def _handle_direct_agent_team_tags(self, agent: Agent, run: AgentRun, message: QueueMessage) -> None:
+        agent_teams = self._teams_for_agent(agent.id)
+        if not agent_teams:
+            return
+
+        agents_by_team: dict[str, list[Agent]] = {}
+        for team in agent_teams:
+            members = [self.agents.get(agent_id) for agent_id in team.agent_ids]
+            agents_by_team[team.id] = members
+
+        for team_id, content in self._extract_tags(run.output, "#"):
+            team = self._resolve_team_for_tag(team_id, agent_teams, agent.id)
+            if team is None:
+                continue
+            self.chat.post(team.id, ChatMessageCreate(sender=agent.id, message=content))
+            delivered = self._broadcast_chatroom(team, agent.id, content, agents_by_team[team.id], message)
+            self.events.emit("team.chatroom", {"team_id": team.id, "from_agent": agent.id, "delivered": delivered})
+
+        mention_team = self._resolve_team_context_for_agent(agent.id, agent_teams)
+        if mention_team is not None:
+            await self._handle_team_tags(mention_team, run, message, agents_by_team[mention_team.id], process_chatrooms=False)
 
     def _broadcast_chatroom(self, team: Team, from_agent: str, content: str, agents: list[Agent], parent: QueueMessage) -> int:
         delivered = 0
@@ -288,52 +316,43 @@ class Orchestrator:
         others = [agent for agent in agents if agent.id != team.leader_agent]
         return leaders + others if leaders else agents
 
+    def _teams_for_agent(self, agent_id: str) -> list[Team]:
+        return [team for team in self.teams.list() if agent_id in team.agent_ids]
+
+    @staticmethod
+    def _resolve_team_context_for_agent(agent_id: str, teams: list[Team]) -> Team | None:
+        for team in teams:
+            if team.leader_agent == agent_id and agent_id in team.agent_ids:
+                return team
+        return teams[0] if teams else None
+
+    @staticmethod
+    def _resolve_team_for_tag(team_id: str, teams: list[Team], agent_id: str) -> Team | None:
+        lookup = team_id.lower()
+        for team in teams:
+            if team.id.lower() == lookup and agent_id in team.agent_ids:
+                return team
+        return None
+
+    @staticmethod
+    def _agent_lookup(agents: list[Agent]) -> dict[str, str]:
+        return {agent.id.lower(): agent.id for agent in agents}
+
+    @staticmethod
+    def _split_candidate_ids(raw_ids: str) -> list[str]:
+        return [item.strip().lower() for item in raw_ids.split(",") if item.strip()]
+
     @staticmethod
     def _extract_tags(text: str, prefix: str) -> list[tuple[str, str]]:
-        return [(tag_id, message) for tag_id, message, _, _ in Orchestrator._extract_bracket_tags(text, prefix)]
+        return [(tag.id, tag.message) for tag in extract_bracket_tags(text, prefix)]
 
     @staticmethod
     def _strip_tags(text: str, prefix: str) -> str:
-        tags = Orchestrator._extract_bracket_tags(text, prefix)
-        if not tags:
-            return text
-        result = ""
-        last_end = 0
-        for _, _, start, end in tags:
-            result += text[last_end:start]
-            last_end = end
-        result += text[last_end:]
-        return result.strip()
+        return strip_bracket_tags(text, prefix)
 
     @staticmethod
     def _extract_bracket_tags(text: str, prefix: str) -> list[tuple[str, str, int, int]]:
-        tags: list[tuple[str, str, int, int]] = []
-        i = 0
-        while i < len(text):
-            if text[i] != "[" or i + 1 >= len(text) or text[i + 1] != prefix:
-                i += 1
-                continue
-            tag_start = i
-            colon_index = text.find(":", i + 2)
-            if colon_index == -1:
-                i += 1
-                continue
-            tag_id = text[i + 2 : colon_index].strip()
-            if not tag_id or "[" in tag_id or "]" in tag_id:
-                i += 1
-                continue
-            depth = 1
-            j = colon_index + 1
-            while j < len(text) and depth > 0:
-                if text[j] == "[":
-                    depth += 1
-                elif text[j] == "]":
-                    depth -= 1
-                j += 1
-            if depth == 0:
-                tags.append((tag_id, text[colon_index + 1 : j - 1].strip(), tag_start, j))
-            i = j
-        return tags
+        return [(tag.id, tag.message, tag.start, tag.end) for tag in extract_bracket_tags(text, prefix)]
 
     async def _run_agent(self, agent: Agent, input_text: str, context: list[str]) -> AgentRun:
         if not agent.enabled:
