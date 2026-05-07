@@ -78,7 +78,7 @@ def test_subprocess_harness_falls_back_to_shell_on_windows_permission_error(monk
 
     assert result.stdout == "shell output"
     assert calls["args"][:5] == ("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command")
-    assert calls["args"][5] == "codex exec --json hello"
+    assert calls["args"][5] == "& codex exec --json hello"
 
 
 def test_subprocess_harness_falls_back_to_powershell_when_command_is_missing_on_windows(monkeypatch) -> None:
@@ -105,7 +105,7 @@ def test_subprocess_harness_falls_back_to_powershell_when_command_is_missing_on_
 
     assert result.stdout == "shell output"
     assert calls["args"][:5] == ("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command")
-    assert calls["args"][5] == "codex exec --json -"
+    assert calls["args"][5] == "$input | & codex exec --json -"
 
 
 def test_subprocess_harness_uses_sync_fallback_when_async_windows_pipes_are_denied(monkeypatch) -> None:
@@ -138,7 +138,7 @@ def test_subprocess_harness_uses_sync_fallback_when_async_windows_pipes_are_deni
     assert result.process["syncFallback"] is True
     assert events == ['{"result":"sync output"}']
     assert calls["args"][:5] == ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
-    assert calls["args"][5] == "codex exec --json -"
+    assert calls["args"][5] == "$input | & codex exec --json -"
     assert calls["kwargs"]["input"] == "hello"
 
 
@@ -238,18 +238,6 @@ def test_codex_provider_includes_context_and_supports_custom_command_line() -> N
     assert fake.stdin_text is None
 
 
-def test_codex_provider_reads_env_command_args(monkeypatch) -> None:
-    monkeypatch.setenv("POCKETSTUDIO_CODEX_COMMAND", "codex-env")
-    monkeypatch.setenv("POCKETSTUDIO_CODEX_ARGS", "exec --json {prompt}")
-    monkeypatch.setenv("POCKETSTUDIO_CODEX_HOME", str(Path.cwd() / ".codex-test"))
-
-    provider = CodexProvider()
-
-    assert provider.command == "codex-env"
-    assert provider.base_args == ["exec", "--json", "{prompt}"]
-    assert provider._env() == {"CODEX_HOME": str(Path.cwd() / ".codex-test")}
-
-
 def test_cli_agent_providers_build_args_and_parse_output() -> None:
     class FakeHarness:
         def __init__(self) -> None:
@@ -293,6 +281,11 @@ def test_provider_registry_exposes_core_harnesses() -> None:
     diagnostics = registry.diagnostics()
     provider_names = {provider["name"] for provider in diagnostics["providers"]}
     assert {"openai", "codex", "claude"} <= provider_names
+    openai = next(provider for provider in diagnostics["providers"] if provider["name"] == "openai")
+    assert openai["providerName"] == "codex"
+    assert openai["harness"] == "codex"
+    assert "codexHome" in openai
+    assert "workspaceFallbackEnabled" not in openai["codexHome"]
     assert "windowsPowerShellFallback" in diagnostics
 
 

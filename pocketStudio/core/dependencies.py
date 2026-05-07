@@ -109,6 +109,7 @@ def get_orchestrator() -> Orchestrator:
         chat=get_chat_service(),
         events=get_event_service(),
         providers=get_provider_registry(),
+        projects=get_project_service(),
     )
 
 

@@ -91,9 +91,10 @@ class SubprocessHarness:
         merged_env = os.environ.copy()
         if env:
             merged_env.update(env)
+        command = _resolved_command(self.command)
         try:
             process = await asyncio.create_subprocess_exec(
-                self.command,
+                command,
                 *args,
                 cwd=str(cwd) if cwd else None,
                 env=merged_env,
@@ -105,15 +106,15 @@ class SubprocessHarness:
             if os.name != "nt" or not _should_fallback_to_windows_powershell(exc):
                 raise
             try:
-                process = await self._run_windows_powershell(args, cwd, merged_env, stdin_text)
+                process = await self._run_windows_powershell(command, args, cwd, merged_env, stdin_text)
             except OSError as fallback_exc:
                 if not _should_fallback_to_windows_sync_subprocess(fallback_exc):
                     raise
-                return await self._run_windows_powershell_sync(args, cwd, merged_env, on_stdout_line, stdin_text)
+                return await self._run_windows_powershell_sync(command, args, cwd, merged_env, on_stdout_line, stdin_text)
         self.registry.register(
             process_key,
             process,
-            {"command": self.command, "args": list(args), "cwd": str(cwd) if cwd else None},
+            {"command": self.command, "resolvedCommand": command, "args": list(args), "cwd": str(cwd) if cwd else None},
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -133,6 +134,7 @@ class SubprocessHarness:
             process={
                 "pid": process.pid,
                 "command": self.command,
+                "resolvedCommand": command,
                 "args": list(args),
                 "cwd": str(cwd) if cwd else None,
                 "timedOut": False,
@@ -141,6 +143,7 @@ class SubprocessHarness:
 
     async def _run_windows_powershell(
         self,
+        command: str,
         args: Sequence[str],
         cwd: Path | str | None,
         env: dict[str, str],
@@ -152,7 +155,7 @@ class SubprocessHarness:
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            subprocess.list2cmdline([self.command, *args]),
+            _powershell_command([command, *args], pipe_stdin=stdin_text is not None),
             cwd=str(cwd) if cwd else None,
             env=env,
             stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
@@ -162,6 +165,7 @@ class SubprocessHarness:
 
     async def _run_windows_powershell_sync(
         self,
+        command: str,
         args: Sequence[str],
         cwd: Path | str | None,
         env: dict[str, str],
@@ -174,7 +178,7 @@ class SubprocessHarness:
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            subprocess.list2cmdline([self.command, *args]),
+            _powershell_command([command, *args], pipe_stdin=stdin_text is not None),
         ]
 
         def run_sync() -> subprocess.CompletedProcess[str]:
@@ -204,6 +208,7 @@ class SubprocessHarness:
             process={
                 "pid": None,
                 "command": self.command,
+                "resolvedCommand": command,
                 "args": list(args),
                 "cwd": str(cwd) if cwd else None,
                 "timedOut": False,
@@ -257,3 +262,12 @@ def _should_fallback_to_windows_sync_subprocess(exc: OSError) -> bool:
 
 def _windows_powershell() -> str:
     return shutil.which("powershell.exe") or shutil.which("powershell") or "powershell.exe"
+
+
+def _resolved_command(command: str) -> str:
+    return shutil.which(command) or command
+
+
+def _powershell_command(command: Sequence[str], pipe_stdin: bool = False) -> str:
+    invocation = "& " + subprocess.list2cmdline(list(command))
+    return f"$input | {invocation}" if pipe_stdin else invocation

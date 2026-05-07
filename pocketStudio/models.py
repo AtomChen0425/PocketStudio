@@ -125,6 +125,7 @@ class ProjectCreate(BaseModel):
     prefix: str = ""
     color: str = ""
     status: str = "active"
+    workspace: str | None = None
 
 
 class Project(ProjectCreate):

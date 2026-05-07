@@ -18,6 +18,7 @@ from pocketStudio.providers.registry import ProviderRegistry
 from pocketStudio.services.agent_service import AgentService
 from pocketStudio.services.chat_service import ChatService
 from pocketStudio.services.event_service import EventService
+from pocketStudio.services.project_service import ProjectService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
 from pocketStudio.services.team_routing import extract_bracket_tags, strip_bracket_tags
@@ -38,6 +39,7 @@ class Orchestrator:
         chat: ChatService,
         events: EventService,
         providers: ProviderRegistry,
+        projects: ProjectService | None = None,
     ) -> None:
         self.agents = agents
         self.teams = teams
@@ -45,6 +47,7 @@ class Orchestrator:
         self.chat = chat
         self.events = events
         self.providers = providers
+        self.projects = projects
 
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
         return self.queue.enqueue(payload)
@@ -69,7 +72,7 @@ class Orchestrator:
     async def _dispatch(self, message: QueueMessage) -> OrchestrationResult:
         target_type, target_id = self._parse_target(message.target)
         if target_type == "agent":
-            agent = self.agents.get(target_id)
+            agent = self._agent_for_message(target_id, message)
             self.queue.insert_agent_message(
                 agent.id,
                 "user",
@@ -91,7 +94,7 @@ class Orchestrator:
         return await self._run_team(message, team)
 
     async def _run_team(self, message: QueueMessage, team: Team) -> OrchestrationResult:
-        agents = [self.agents.get(agent_id) for agent_id in team.agent_ids]
+        agents = [self._agent_for_message(agent_id, message) for agent_id in team.agent_ids]
         if not agents:
             raise ValueError(f"Team '{team.id}' has no agents")
 
@@ -247,6 +250,7 @@ class Orchestrator:
         agents_by_team: dict[str, list[Agent]] = {}
         for team in agent_teams:
             members = [self.agents.get(agent_id) for agent_id in team.agent_ids]
+            members = [self._agent_for_message(member.id, message) for member in members]
             agents_by_team[team.id] = members
 
         for team_id, content in self._extract_tags(run.output, "#"):
@@ -305,6 +309,7 @@ class Orchestrator:
             "channel": parent_metadata.get("channel", "team"),
             "sender": parent.sender if parent else "",
             "senderId": parent_metadata.get("senderId") or parent_metadata.get("sender_id"),
+            "projectId": parent_metadata.get("projectId") or parent_metadata.get("project_id"),
         }
         return {key: value for key, value in metadata.items() if value is not None}
 
@@ -365,6 +370,15 @@ class Orchestrator:
             self.events.emit("agent.process", {"agent_id": agent.id, "provider": agent.provider, "process": process})
         self.events.emit("agent.completed", {"agent_id": agent.id, "content": response.text})
         return AgentRun(agent_id=agent.id, input=input_text, output=response.text)
+
+    def _agent_for_message(self, agent_id: str, message: QueueMessage) -> Agent:
+        agent = self.agents.get(agent_id)
+        project_id = message.metadata.get("projectId") or message.metadata.get("project_id")
+        if not project_id or self.projects is None:
+            return agent
+        workspace = self.projects.project_agent_workspace(str(project_id), agent.id)
+        self.agents.ensure_workspace(workspace, agent)
+        return agent.model_copy(update={"workspace": workspace})
 
     @staticmethod
     def _parse_target(target: str) -> tuple[str, str]:

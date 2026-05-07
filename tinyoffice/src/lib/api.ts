@@ -272,6 +272,7 @@ export async function sendMessage(payload: {
   agent?: string;
   sender?: string;
   channel?: string;
+  projectId?: string;
 }): Promise<{ ok: boolean; messageId: string }> {
   const targetMatch = payload.message.match(/^@(team:)?([a-zA-Z0-9_-]+)/);
   const agent = payload.agent || targetMatch?.[2] || "pocketstudio";
@@ -282,6 +283,7 @@ export async function sendMessage(payload: {
       target,
       content: payload.message.replace(/^@(team:)?[a-zA-Z0-9_-]+\s*/, ""),
       sender: payload.sender || "Web",
+      metadata: payload.projectId ? { projectId: payload.projectId } : {},
     }),
   });
   return { ok: true, messageId: String(message.id) };
@@ -478,6 +480,7 @@ export interface Project {
   description: string;
   prefix: string;
   color: string;
+  workspace?: string | null;
   status: "active" | "archived";
   createdAt: number;
   updatedAt: number;
@@ -488,7 +491,7 @@ export async function getProjects(): Promise<Project[]> {
 }
 
 export async function createProject(
-  data: Pick<Project, "name" | "description">
+  data: Pick<Project, "name" | "description"> & Partial<Pick<Project, "workspace">>
 ): Promise<{ ok: boolean; project: Project }> {
   return apiFetch<{ ok: boolean; project: Project }>("/api/projects", {
     method: "POST",

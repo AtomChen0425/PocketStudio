@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shlex
 
 from pocketStudio.providers.base import AgentProvider, ProviderRequest, ProviderResponse
@@ -10,6 +9,7 @@ from pocketStudio.providers.subprocess import ProcessRegistry, SubprocessHarness
 
 class CodexProvider(AgentProvider):
     name = "codex"
+    harness_name = "codex"
 
     def __init__(
         self,
@@ -18,9 +18,8 @@ class CodexProvider(AgentProvider):
         registry: ProcessRegistry | None = None,
         timeout_seconds: int = 600,
     ) -> None:
-        self.command = command or os.getenv("POCKETSTUDIO_CODEX_COMMAND") or "codex"
-        env_args = os.getenv("POCKETSTUDIO_CODEX_ARGS")
-        self.base_args = base_args if base_args is not None else (_split_command_line(env_args) if env_args else None)
+        self.command = command or "codex"
+        self.base_args = base_args
         self.harness = SubprocessHarness(command=self.command, registry=registry, timeout_seconds=timeout_seconds)
 
     async def run(self, request: ProviderRequest) -> ProviderResponse:
@@ -37,7 +36,6 @@ class CodexProvider(AgentProvider):
             args,
             process_key=request.agent.id,
             cwd=request.agent.workspace,
-            env=self._env(),
             on_stdout_line=on_line,
             stdin_text=stdin_text,
         )
@@ -60,7 +58,7 @@ class CodexProvider(AgentProvider):
             return self._custom_args(request)
 
         args = ["exec"]
-        if not request.reset and os.getenv("POCKETSTUDIO_CODEX_RESUME_LAST", "1").lower() not in {"0", "false", "no"}:
+        if not request.reset:
             args.extend(["resume", "--last"])
         if request.agent.model:
             args.extend(["--model", request.agent.model])
@@ -68,8 +66,7 @@ class CodexProvider(AgentProvider):
         if system_prompt:
             args.extend(["-c", f"developer_instructions={system_prompt}"])
         args.extend(["--skip-git-repo-check"])
-        if os.getenv("POCKETSTUDIO_CODEX_BYPASS_SANDBOX", "1").lower() not in {"0", "false", "no"}:
-            args.append("--dangerously-bypass-approvals-and-sandbox")
+        args.append("--dangerously-bypass-approvals-and-sandbox")
         args.extend(["--json", "-"])
         return args, self._prompt(request)
 
@@ -80,13 +77,6 @@ class CodexProvider(AgentProvider):
             args.append("-")
             return args, prompt
         return args, None
-
-    @staticmethod
-    def _env() -> dict[str, str] | None:
-        codex_home = os.getenv("POCKETSTUDIO_CODEX_HOME")
-        if not codex_home:
-            return None
-        return {"CODEX_HOME": codex_home}
 
     @staticmethod
     def _prompt(request: ProviderRequest) -> str:

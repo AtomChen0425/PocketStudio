@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shutil
 import uuid
-import os
 from pathlib import Path
 
 from pocketStudio.core.database import Database
@@ -106,17 +105,21 @@ class ProviderRegistry:
         for name in self.list_names():
             provider = self._providers[name]
             command = getattr(provider, "command", None)
+            resolved_path = _resolved_command_path(command)
+            harness = getattr(provider, "harness_name", None)
             provider_info = {
                 "name": name,
+                "providerName": getattr(provider, "name", name),
+                "harness": harness,
                 "class": provider.__class__.__name__,
                 "builtin": name in self.BUILTIN_PROVIDERS,
                 "command": command,
-                "resolvedPath": shutil.which(command) if command else None,
+                "resolvedPath": resolved_path,
                 "baseArgs": list(getattr(provider, "base_args", []) or []),
             }
-            if command == "codex":
-                provider_info["codexHome"] = _codex_home_diagnostics()
-            provider_info["available"] = bool(provider_info["resolvedPath"]) if command else True
+            if harness == "codex" or isinstance(provider, CodexProvider):
+                provider_info["codexHome"] = _codex_home_diagnostics(Path.home() / ".codex")
+            provider_info["available"] = bool(resolved_path) if command else True
             providers.append(provider_info)
         return {
             "providers": providers,
@@ -125,16 +128,17 @@ class ProviderRegistry:
         }
 
 
-def _codex_home_diagnostics() -> dict:
-    codex_home = Path(os.getenv("POCKETSTUDIO_CODEX_HOME") or Path.home() / ".codex")
+def _codex_home_diagnostics(codex_home: Path) -> dict:
     sessions_dir = codex_home / "sessions"
+    writable = _can_write(codex_home)
+    sessions_writable = _can_write(sessions_dir)
     return {
         "path": str(codex_home),
         "exists": codex_home.exists(),
-        "writable": _can_write(codex_home),
+        "writable": writable,
         "sessionsPath": str(sessions_dir),
         "sessionsExists": sessions_dir.exists(),
-        "sessionsWritable": _can_write(sessions_dir),
+        "sessionsWritable": sessions_writable,
     }
 
 
@@ -148,3 +152,9 @@ def _can_write(path: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def _resolved_command_path(command: str | None) -> str | None:
+    if not command:
+        return None
+    return shutil.which(command)

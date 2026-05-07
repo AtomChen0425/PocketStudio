@@ -6,13 +6,14 @@ from pathlib import Path
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
-from pocketStudio.models import AgentCreate, AgentRun, MessageCreate, MessageStatus, TeamCreate, TeamMode
+from pocketStudio.models import AgentCreate, AgentRun, MessageCreate, MessageStatus, ProjectCreate, TeamCreate, TeamMode
 from pocketStudio.providers.base import AgentProvider, ProviderRequest, ProviderResponse
 from pocketStudio.providers.registry import ProviderRegistry
 from pocketStudio.services.agent_service import AgentService
 from pocketStudio.services.chat_service import ChatService
 from pocketStudio.services.event_service import EventService
 from pocketStudio.services.orchestrator import Orchestrator
+from pocketStudio.services.project_service import ProjectService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
 from pocketStudio.services.team_routing import convert_tags_to_readable, extract_bracket_tags, strip_bracket_tags
@@ -41,6 +42,17 @@ def build_orchestrator(home: Path) -> Orchestrator:
     )
 
 
+class WorkspaceRecordingProvider(AgentProvider):
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.workspaces: list[Path] = []
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        self.workspaces.append(request.agent.workspace)
+        return ProviderResponse(text=f"workspace={request.agent.workspace}")
+
+
 def test_chain_team_processes_agents_in_order() -> None:
     home = temp_home()
     try:
@@ -60,6 +72,47 @@ def test_chain_team_processes_agents_in_order() -> None:
         assert [run.agent_id for run in result.runs] == ["planner", "coder"]
         assert result.output == result.runs[-1].output
         assert chat[0].message == result.output
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_project_context_runs_agent_inside_project_workspace() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        registry = ProviderRegistry()
+        provider = WorkspaceRecordingProvider()
+        registry.register(provider)
+        projects = ProjectService(db, events)
+        project = projects.create_project(ProjectCreate(name="Scoped Project", workspace=str(home / "project-root")))
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=TeamService(db),
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            projects=projects,
+        )
+        orchestrator.agents.create(AgentCreate(id="scoped", name="Scoped", role="Uses project", provider="recording"))
+
+        message = orchestrator.enqueue(
+            MessageCreate(
+                target="@agent:scoped",
+                content="work inside project",
+                metadata={"projectId": project.id},
+            )
+        )
+        result = asyncio.run(orchestrator.process_message(message.id))
+
+        expected_workspace = home / "project-root" / ".pocketStudio" / "agents" / "scoped"
+        assert provider.workspaces == [expected_workspace]
+        assert expected_workspace.is_dir()
+        assert "workspace=" in result.output
+        assert orchestrator.agents.get("scoped").workspace != expected_workspace
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

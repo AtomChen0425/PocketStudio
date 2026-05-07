@@ -1,5 +1,6 @@
 import uuid
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -161,11 +162,19 @@ def test_task_reorder_persists_status_and_position() -> None:
 
 def test_project_prefix_and_task_identifier_follow_tinyagi_shape() -> None:
     client = TestClient(app)
-    project_response = client.post("/api/projects", json={"name": unique("System Design"), "description": "Identifiers"})
+    workspace = f".pytest-local/project-workspace-{uuid.uuid4().hex[:8]}"
+    project_response = client.post(
+        "/api/projects",
+        json={"name": unique("System Design"), "description": "Identifiers", "workspace": workspace},
+    )
     assert project_response.status_code == 200
     project = project_response.json()["project"]
     assert project["prefix"].startswith("S")
     assert project["color"].startswith("#")
+    assert Path(project["workspace"]) == Path(workspace)
+    workspace_status = client.get(f"/api/projects/{project['id']}/workspace")
+    assert workspace_status.status_code == 200
+    assert workspace_status.json()["ok"] is True
 
     first = client.post("/api/tasks", json={"title": unique("Task"), "projectId": project["id"]}).json()
     second = client.post("/api/tasks", json={"title": unique("Task"), "projectId": project["id"]}).json()

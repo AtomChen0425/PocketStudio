@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS projects (
     description TEXT NOT NULL DEFAULT '',
     prefix TEXT NOT NULL DEFAULT 'PS',
     color TEXT NOT NULL DEFAULT '#84cc16',
+    workspace TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -229,6 +230,7 @@ class Database:
         self._add_column(conn, "tasks", "assignee_type", "TEXT NOT NULL DEFAULT ''")
         self._add_column(conn, "tasks", "project_id", "TEXT")
         self._add_column(conn, "tasks", "position", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column(conn, "projects", "workspace", "TEXT")
         self._add_column(conn, "schedules", "last_fired_at", "INTEGER")
         self._add_column(conn, "schedules", "last_fire_key", "TEXT")
         self._add_column(conn, "agents", "heartbeat_enabled", "INTEGER NOT NULL DEFAULT 1")

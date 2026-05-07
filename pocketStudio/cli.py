@@ -355,13 +355,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_project.add_argument("--description", default="")
     add_project.add_argument("--prefix", default="")
     add_project.add_argument("--color", default="")
+    add_project.add_argument("--workspace")
     update_project = project_sub.add_parser("update")
     update_project.add_argument("id")
     update_project.add_argument("--name")
     update_project.add_argument("--description")
     update_project.add_argument("--prefix")
     update_project.add_argument("--color")
+    update_project.add_argument("--workspace")
     update_project.add_argument("--status", choices=["active", "archived"])
+    project_workspace = project_sub.add_parser("workspace")
+    project_workspace.add_argument("id")
+    project_repair = project_sub.add_parser("repair-workspace")
+    project_repair.add_argument("id")
     remove_project = project_sub.add_parser("remove")
     remove_project.add_argument("id")
 
@@ -606,8 +612,14 @@ def run_project(args: argparse.Namespace, client: ApiClient) -> int:
         return print_json(client.get("/api/projects"))
     if args.project_command == "show":
         return print_json(client.get(f"/api/projects/{args.id}"))
+    if args.project_command == "workspace":
+        return print_json(client.get(f"/api/projects/{args.id}/workspace"))
+    if args.project_command == "repair-workspace":
+        return print_json(client.post(f"/api/projects/{args.id}/workspace/repair", {}))
     if args.project_command == "add":
         payload = {"name": args.name, "description": args.description, "prefix": args.prefix, "color": args.color}
+        if args.workspace:
+            payload["workspace"] = args.workspace
         return print_json(client.post("/api/projects", payload))
     if args.project_command == "update":
         payload = {
@@ -617,6 +629,7 @@ def run_project(args: argparse.Namespace, client: ApiClient) -> int:
                 "description": args.description,
                 "prefix": args.prefix,
                 "color": args.color,
+                "workspace": args.workspace,
                 "status": args.status,
             }.items()
             if value is not None

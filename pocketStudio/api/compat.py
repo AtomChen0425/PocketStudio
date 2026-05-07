@@ -113,6 +113,7 @@ def _project_payload(project, task_count: int | None = None) -> dict:
         "description": project.description,
         "prefix": project.prefix,
         "color": project.color,
+        "workspace": project.workspace,
         "status": project.status,
         "createdAt": _millis(project.created_at),
         "updatedAt": _millis(project.updated_at),
@@ -410,7 +411,13 @@ def enqueue_legacy_message(
     routed = channels.route_message(channel, sender_id, text, explicit_agent=agent)
     if routed.target is None:
         return {"ok": True, "messageId": None, "switchNotification": routed.switch_notification}
-    message = orchestrator.enqueue(MessageCreate(target=routed.target, content=routed.content or text, sender=sender))
+    metadata = {"channel": channel, "senderId": sender_id}
+    project_id = payload.get("projectId") or payload.get("project_id")
+    if project_id:
+        metadata["projectId"] = project_id
+    message = orchestrator.enqueue(
+        MessageCreate(target=routed.target, content=routed.content or text, sender=sender, metadata=metadata)
+    )
     response = {"ok": True, "messageId": str(message.id)}
     if routed.switch_notification:
         response["switchNotification"] = routed.switch_notification
@@ -810,6 +817,22 @@ def update_project(project_id: str, payload: dict[str, Any], projects: ProjectSe
         merged.update(payload)
         project = projects.update_project(project_id, ProjectCreate(**merged))
         return {"ok": True, "project": _project_payload(project, projects.task_count(project.id))}
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.get("/projects/{project_id}/workspace")
+def get_project_workspace_status(project_id: str, projects: ProjectService = Depends(get_project_service)) -> dict:
+    try:
+        return projects.workspace_status(project_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.post("/projects/{project_id}/workspace/repair")
+def repair_project_workspace(project_id: str, projects: ProjectService = Depends(get_project_service)) -> dict:
+    try:
+        return projects.workspace_status(project_id, repair=True)
     except KeyError as exc:
         raise not_found(exc) from exc
 
