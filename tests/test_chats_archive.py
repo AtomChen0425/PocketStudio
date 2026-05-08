@@ -43,3 +43,37 @@ def test_worker_maintenance_can_prune_chat_archives() -> None:
         detail = client.get(f"/api/chats/{team_id}")
         assert detail.status_code == 200
         assert detail.json()["messages"] == []
+
+
+def test_chatroom_post_enqueues_internal_member_messages_once() -> None:
+    team_id = f"dispatch-chat-{uuid4().hex[:8]}"
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/agents",
+            json={"id": f"{team_id}-a", "name": "A", "role": "A", "provider": "local"},
+        )
+        client.post(
+            "/api/agents",
+            json={"id": f"{team_id}-b", "name": "B", "role": "B", "provider": "local"},
+        )
+        team_response = client.post(
+            "/api/teams",
+            json={
+                "id": team_id,
+                "name": "Dispatch Chat",
+                "mode": "chain",
+                "agent_ids": [f"{team_id}-a", f"{team_id}-b"],
+            },
+        )
+        assert team_response.status_code == 200
+
+        posted = client.post(f"/api/chatroom/{team_id}", json={"message": "hello team"})
+        assert posted.status_code == 200
+
+        messages = client.get("/api/queue").json()
+        chatroom_messages = [
+            item for item in messages if item["metadata"].get("teamId") == team_id and item["metadata"].get("channel") == "chatroom"
+        ]
+        assert {item["target"] for item in chatroom_messages} == {f"@agent:{team_id}-a", f"@agent:{team_id}-b"}
+        assert all(item["sender"] == "user" for item in chatroom_messages)

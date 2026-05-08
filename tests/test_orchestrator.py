@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
-from pocketStudio.models import AgentCreate, AgentRun, MessageCreate, MessageStatus, ProjectCreate, TeamCreate, TeamMode
+from pocketStudio.models import ChatMessageCreate, AgentCreate, AgentRun, MessageCreate, MessageStatus, ProjectCreate, TeamCreate, TeamMode
 from pocketStudio.providers.base import AgentProvider, ProviderRequest, ProviderResponse
 from pocketStudio.providers.registry import ProviderRegistry
 from pocketStudio.services.agent_service import AgentService
@@ -53,6 +53,13 @@ class WorkspaceRecordingProvider(AgentProvider):
         return ProviderResponse(text=f"workspace={request.agent.workspace}")
 
 
+class AgentIdEchoProvider(AgentProvider):
+    name = "agent-id-echo"
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        return ProviderResponse(text=f"{request.agent.id} says hello")
+
+
 def test_chain_team_processes_agents_in_order() -> None:
     home = temp_home()
     try:
@@ -72,6 +79,56 @@ def test_chain_team_processes_agents_in_order() -> None:
         assert [run.agent_id for run in result.runs] == ["planner", "coder"]
         assert result.output == result.runs[-1].output
         assert chat[0].message == result.output
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_team_chain_does_not_store_teammate_output_as_user_input() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        orchestrator.providers.register(AgentIdEchoProvider())
+        orchestrator.agents.create(AgentCreate(id="planner", name="Planner", role="Plans", provider="agent-id-echo"))
+        orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes", provider="agent-id-echo"))
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.chain, agent_ids=["planner", "coder"]))
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Build it", sender="Web"))
+        asyncio.run(orchestrator.process_message(message.id))
+
+        planner_messages = orchestrator.queue.get_agent_messages("planner")
+        coder_messages = orchestrator.queue.get_agent_messages("coder")
+        assert [item.role for item in planner_messages] == ["user", "assistant"]
+        assert [item.role for item in coder_messages] == ["assistant"]
+        assert all(not (item.role == "user" and "planner says hello" in item.content) for item in coder_messages)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_chatroom_origin_records_agent_outputs_without_orchestrator_echo() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        orchestrator.providers.register(AgentIdEchoProvider())
+        orchestrator.agents.create(AgentCreate(id="planner", name="Planner", role="Plans", provider="agent-id-echo"))
+        orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes", provider="agent-id-echo"))
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.chain, agent_ids=["planner", "coder"]))
+        orchestrator.chat.post("dev", ChatMessageCreate(sender="user", message="Build it"))
+
+        message = orchestrator.enqueue(
+            MessageCreate(
+                target="@team:dev",
+                content="Build it",
+                sender="Web",
+                metadata={"channel": "chatroom", "teamId": "dev"},
+            )
+        )
+        asyncio.run(orchestrator.process_message(message.id))
+
+        chat = orchestrator.chat.list("dev")
+        assert [item.sender for item in chat] == ["user", "planner", "coder"]
+        assert "planner says hello" in chat[1].message
+        assert "coder says hello" in chat[2].message
+        assert all(item.sender != "orchestrator" for item in chat)
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

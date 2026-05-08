@@ -103,14 +103,16 @@ class Orchestrator:
             ordered_agents = self._order_agents_for_team(team, agents)
             current_input = message.content
             context: list[str] = []
-            for agent in ordered_agents:
-                self.queue.insert_agent_message(
-                    agent.id,
-                    "user",
-                    current_input,
-                    str(message.id),
-                    sender=message.sender,
-                )
+            chatroom_origin = self._is_chatroom_origin(message)
+            for index, agent in enumerate(ordered_agents):
+                if index == 0 and not chatroom_origin:
+                    self.queue.insert_agent_message(
+                        agent.id,
+                        "user",
+                        current_input,
+                        str(message.id),
+                        sender=message.sender,
+                    )
                 run = await self._run_agent(agent, current_input, context)
                 runs.append(run)
                 self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
@@ -139,7 +141,10 @@ class Orchestrator:
             if iterative_runs:
                 output = "\n\n".join(f"## {run.agent_id}\n{run.output}" for run in runs)
 
-        self.chat.post(team.id, ChatMessageCreate(sender="orchestrator", message=output))
+        if self._is_chatroom_origin(message):
+            self._post_chatroom_run_outputs(team, runs)
+        else:
+            self.chat.post(team.id, ChatMessageCreate(sender="orchestrator", message=output))
         return OrchestrationResult(message_id=message.id, target=message.target, runs=runs, output=output)
 
     async def _run_iterative_rounds(
@@ -288,6 +293,16 @@ class Orchestrator:
             )
             delivered += 1
         return delivered
+
+    def _post_chatroom_run_outputs(self, team: Team, runs: list[AgentRun]) -> None:
+        for run in runs:
+            message = self._strip_tags(run.output, "#").strip()
+            if message:
+                self.chat.post(team.id, ChatMessageCreate(sender=run.agent_id, message=message))
+
+    @staticmethod
+    def _is_chatroom_origin(message: QueueMessage) -> bool:
+        return message.metadata.get("channel") == "chatroom" or message.metadata.get("teamId")
 
     @staticmethod
     def _team_child_metadata(
