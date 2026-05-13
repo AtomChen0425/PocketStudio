@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
+from pocketStudio.core.json_store import read_json_object, write_json_object
 from pocketStudio.models import Agent, AgentCreate
 
 
@@ -88,8 +90,10 @@ class AgentService:
         (workspace / ".pocketStudio").mkdir(exist_ok=True)
         (workspace / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
         (workspace / ".claude").mkdir(exist_ok=True)
+        (workspace / ".codex").mkdir(exist_ok=True)
         (workspace / "memory").mkdir(exist_ok=True)
-        self._ensure_claude_skills_link(workspace)
+        self.ensure_tool_skills_link(workspace / ".agents" / "skills", workspace / ".claude" / "skills")
+        self.ensure_tool_skills_link(workspace / ".agents" / "skills", workspace / ".codex" / "skills")
         agents_md = workspace / "AGENTS.md"
         if not agents_md.exists():
             agents_md.write_text("", encoding="utf-8")
@@ -266,7 +270,8 @@ class AgentService:
         skill_path = target / "SKILL.md"
         if not skill_path.exists():
             skill_path.write_text(f"# {ref}\n\nInstalled placeholder for pocketStudio.\n", encoding="utf-8")
-        self._ensure_claude_skills_link(agent.workspace)
+        self.ensure_tool_skills_link(agent.workspace / ".agents" / "skills", agent.workspace / ".claude" / "skills")
+        self.ensure_tool_skills_link(agent.workspace / ".agents" / "skills", agent.workspace / ".codex" / "skills")
         return skill_path
 
     @classmethod
@@ -313,17 +318,34 @@ class AgentService:
         return "\n".join(lines)
 
     @staticmethod
-    def _ensure_claude_skills_link(workspace: Path) -> None:
-        source = workspace / ".agents" / "skills"
-        target = workspace / ".claude" / "skills"
+    def ensure_tool_skills_link(source: Path, target: Path) -> None:
         source.mkdir(parents=True, exist_ok=True)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() or target.is_symlink():
+            if target.is_dir() and not target.is_symlink():
+                AgentService._sync_skill_tree(source, target)
             return
         try:
-            target.symlink_to(Path("..") / ".agents" / "skills", target_is_directory=True)
+            target.symlink_to(source.resolve(), target_is_directory=True)
         except OSError:
             target.mkdir(parents=True, exist_ok=True)
+            AgentService._sync_skill_tree(source, target)
+
+    @staticmethod
+    def _ensure_claude_skills_link(workspace: Path) -> None:
+        AgentService.ensure_tool_skills_link(workspace / ".agents" / "skills", workspace / ".claude" / "skills")
+
+    @staticmethod
+    def _sync_skill_tree(source: Path, target: Path) -> None:
+        if source.resolve() == target.resolve():
+            return
+        for path in source.rglob("*"):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(source)
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)
 
     @staticmethod
     def _workspace_checks(workspace: Path) -> list[dict]:
@@ -332,11 +354,13 @@ class AgentService:
             ("directory", workspace / ".pocketStudio"),
             ("directory", workspace / ".agents" / "skills"),
             ("directory", workspace / ".claude"),
+            ("directory", workspace / ".codex"),
             ("directory", workspace / "memory"),
             ("file", workspace / "AGENTS.md"),
             ("file", workspace / "heartbeat.md"),
             ("file", workspace / ".pocketStudio" / "SOUL.md"),
             ("skillsLink", workspace / ".claude" / "skills"),
+            ("skillsLink", workspace / ".codex" / "skills"),
         ]
         result = []
         for kind, path in checks:
@@ -384,7 +408,7 @@ class AgentService:
         return {"name": values["name"], "summary": values["summary"]}
 
     def _default_heartbeat_interval(self) -> int:
-        file_settings = self._read_settings_file()
+        file_settings = read_json_object(self.settings.settings_path)
         try:
             value = (file_settings.get("monitoring") or {}).get("heartbeat_interval")
             if value is not None:
@@ -401,21 +425,8 @@ class AgentService:
                 pass
         return self.settings.heartbeat_interval_seconds
 
-    def _read_settings_file(self) -> dict:
-        path = self.settings.settings_path
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {}
-
-    def _write_settings_file(self, data: dict) -> None:
-        self.settings.pocketStudio_home.mkdir(parents=True, exist_ok=True)
-        self.settings.settings_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
     def _sync_agent_settings(self, agent: Agent) -> None:
-        data = self._read_settings_file()
+        data = read_json_object(self.settings.settings_path)
         agents = data.setdefault("agents", {})
         agents[agent.id] = {
             "name": agent.name,
@@ -425,14 +436,14 @@ class AgentService:
             "system_prompt": agent.system_prompt or agent.role,
             "heartbeat": {"enabled": agent.heartbeat_enabled, "interval": agent.heartbeat_interval},
         }
-        self._write_settings_file(data)
+        write_json_object(self.settings.settings_path, data)
 
     def _remove_agent_settings(self, agent_id: str) -> None:
-        data = self._read_settings_file()
+        data = read_json_object(self.settings.settings_path)
         agents = data.get("agents")
         if isinstance(agents, dict) and agent_id in agents:
             agents.pop(agent_id, None)
-            self._write_settings_file(data)
+            write_json_object(self.settings.settings_path, data)
 
     @staticmethod
     def _to_agent(row) -> Agent:

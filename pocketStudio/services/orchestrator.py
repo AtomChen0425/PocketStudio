@@ -394,6 +394,7 @@ class Orchestrator:
         workspace = self.projects.project_agent_workspace(str(project_id), agent.id)
         if workspace is None:
             return agent
+        AgentService.ensure_tool_skills_link(agent.workspace / ".agents" / "skills", workspace / ".codex" / "skills")
         return agent.model_copy(update={"workspace": workspace})
 
     @staticmethod

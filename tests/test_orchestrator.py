@@ -154,7 +154,10 @@ def test_project_context_runs_agent_inside_project_workspace() -> None:
             providers=registry,
             projects=projects,
         )
-        orchestrator.agents.create(AgentCreate(id="scoped", name="Scoped", role="Uses project", provider="recording"))
+        agent = orchestrator.agents.create(AgentCreate(id="scoped", name="Scoped", role="Uses project", provider="recording"))
+        skill = agent.workspace / ".agents" / "skills" / "project-helper" / "SKILL.md"
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text("# Project Helper\n\nUse this inside project workspaces.\n", encoding="utf-8")
 
         message = orchestrator.enqueue(
             MessageCreate(
@@ -172,6 +175,8 @@ def test_project_context_runs_agent_inside_project_workspace() -> None:
         assert not (expected_workspace / ".agents").exists()
         assert not (expected_workspace / "memory").exists()
         assert not (expected_workspace / "AGENTS.md").exists()
+        assert (expected_workspace / ".codex" / "skills").exists()
+        assert (expected_workspace / ".codex" / "skills" / "project-helper" / "SKILL.md").exists()
         assert "workspace=" in result.output
         assert orchestrator.agents.get("scoped").workspace != expected_workspace
     finally:

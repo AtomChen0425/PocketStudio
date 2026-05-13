@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +8,12 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from pocketStudio.api.errors import not_found
+from pocketStudio.api.payloads import (
+    agent_config,
+    project_payload,
+    schedule_payload_with_status,
+    team_config,
+)
 from pocketStudio.core.dependencies import (
     get_agent_service,
     get_channel_service,
@@ -56,98 +61,6 @@ from pocketStudio.services.worker_service import WorkerService
 from pocketStudio.providers.registry import ProviderRegistry
 
 router = APIRouter(tags=["tinyagi-compat"])
-
-
-def _millis(value: str | int | float | None) -> int:
-    if isinstance(value, (int, float)):
-        return int(value)
-    if not value:
-        return int(time.time() * 1000)
-    parsed = value.replace("Z", "+00:00")
-    try:
-        return int(datetime.fromisoformat(parsed).timestamp() * 1000)
-    except ValueError:
-        return int(time.time() * 1000)
-
-
-def _agent_config(agent) -> dict:
-    return {
-        "name": agent.name,
-        "provider": agent.provider,
-        "model": agent.model or "",
-        "working_directory": str(agent.workspace),
-        "system_prompt": agent.system_prompt or agent.role,
-        "heartbeat": {"enabled": agent.heartbeat_enabled, "interval": agent.heartbeat_interval},
-    }
-
-
-def _team_config(team) -> dict:
-    return {
-        "name": team.name,
-        "agents": team.agent_ids,
-        "leader_agent": team.leader_agent or (team.agent_ids[0] if team.agent_ids else ""),
-        "max_rounds": team.max_rounds,
-        "stop_when_idle": team.stop_when_idle,
-    }
-
-
-def _task_payload(task, comment_count: int = 0) -> dict:
-    return {
-        "id": str(task.id),
-        "number": task.number,
-        "identifier": task.identifier,
-        "title": task.title,
-        "description": task.description,
-        "status": task.status,
-        "assignee": task.assignee or "",
-        "assigneeType": task.assignee_type or ("agent" if task.assignee else ""),
-        "projectId": task.project_id,
-        "sortOrder": task.position,
-        "createdAt": _millis(task.created_at),
-        "updatedAt": _millis(task.updated_at),
-        "commentCount": comment_count,
-    }
-
-
-def _project_payload(project, task_count: int | None = None) -> dict:
-    payload = {
-        "id": project.id,
-        "name": project.name,
-        "description": project.description,
-        "prefix": project.prefix,
-        "color": project.color,
-        "workspace": project.workspace,
-        "status": project.status,
-        "createdAt": _millis(project.created_at),
-        "updatedAt": _millis(project.updated_at),
-    }
-    if task_count is not None:
-        payload["taskCount"] = task_count
-    return payload
-
-
-def _schedule_payload(schedule) -> dict:
-    payload = {
-        "id": schedule.id,
-        "label": schedule.label,
-        "cron": schedule.cron,
-        "runAt": schedule.run_at,
-        "agentId": schedule.agent_id,
-        "message": schedule.message,
-        "channel": schedule.channel,
-        "sender": schedule.sender,
-        "enabled": schedule.enabled,
-        "lastFiredAt": schedule.last_fired_at,
-        "lastFireKey": schedule.last_fire_key,
-        "createdAt": int(time.time() * 1000),
-    }
-    return payload
-
-
-def _schedule_payload_with_status(schedule, schedules: ScheduleService) -> dict:
-    payload = _schedule_payload(schedule)
-    payload.update(schedules.schedule_status(schedule))
-    return payload
 
 
 def _schedule_create_payload(payload: dict[str, Any]) -> ScheduleCreate:
@@ -275,8 +188,8 @@ def get_settings_snapshot(
     custom_providers = _custom_providers(db)
     settings = settings_service.snapshot()
     settings["models"] = {**settings.get("models", {}), "custom_providers": custom_providers}
-    settings["agents"] = {agent.id: _agent_config(agent) for agent in agents.list()}
-    settings["teams"] = {team.id: _team_config(team) for team in teams.list()}
+    settings["agents"] = {agent.id: agent_config(agent) for agent in agents.list()}
+    settings["teams"] = {team.id: team_config(team) for team in teams.list()}
     return settings
 
 
@@ -828,19 +741,19 @@ def list_projects(status: str | None = None, projects: ProjectService = Depends(
     all_projects = projects.list_projects()
     if status:
         all_projects = [project for project in all_projects if project.status == status]
-    return [_project_payload(project, projects.task_count(project.id)) for project in all_projects]
+    return [project_payload(project, projects.task_count(project.id)) for project in all_projects]
 
 
 @router.post("/projects")
 def create_project(payload: ProjectCreate, projects: ProjectService = Depends(get_project_service)) -> dict:
     project = projects.create_project(payload)
-    return {"ok": True, "project": _project_payload(project, projects.task_count(project.id))}
+    return {"ok": True, "project": project_payload(project, projects.task_count(project.id))}
 
 
 @router.get("/projects/{project_id}")
 def get_project(project_id: str, projects: ProjectService = Depends(get_project_service)) -> dict:
     try:
-        return _project_payload(projects.get_project(project_id), projects.task_count(project_id))
+        return project_payload(projects.get_project(project_id), projects.task_count(project_id))
     except KeyError as exc:
         raise not_found(exc) from exc
 
@@ -852,7 +765,7 @@ def update_project(project_id: str, payload: dict[str, Any], projects: ProjectSe
         merged = current.model_dump()
         merged.update(payload)
         project = projects.update_project(project_id, ProjectCreate(**merged))
-        return {"ok": True, "project": _project_payload(project, projects.task_count(project.id))}
+        return {"ok": True, "project": project_payload(project, projects.task_count(project.id))}
     except KeyError as exc:
         raise not_found(exc) from exc
 
@@ -940,7 +853,7 @@ def list_schedules(
     agent: str | None = None,
     schedules: ScheduleService = Depends(get_schedule_service),
 ) -> list[dict]:
-    return [_schedule_payload_with_status(schedule, schedules) for schedule in schedules.list(agent)]
+    return [schedule_payload_with_status(schedule, schedules) for schedule in schedules.list(agent)]
 
 
 @router.post("/schedules")
@@ -949,7 +862,7 @@ def create_schedule(payload: dict[str, Any], schedules: ScheduleService = Depend
         schedule = schedules.create(_schedule_create_payload(payload))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "schedule": _schedule_payload_with_status(schedule, schedules)}
+    return {"ok": True, "schedule": schedule_payload_with_status(schedule, schedules)}
 
 
 @router.post("/schedules/validate")
@@ -968,7 +881,7 @@ def update_schedule(schedule_id: str, payload: dict[str, Any], schedules: Schedu
         raise not_found(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"ok": True, "schedule": _schedule_payload_with_status(schedule, schedules)}
+    return {"ok": True, "schedule": schedule_payload_with_status(schedule, schedules)}
 
 
 @router.post("/schedules/{schedule_id}/fire")
@@ -989,7 +902,7 @@ def fire_schedule(
         "ok": True,
         "messageId": message.id,
         "message": message.model_dump(by_alias=True),
-        "schedule": _schedule_payload_with_status(schedule, schedules),
+        "schedule": schedule_payload_with_status(schedule, schedules),
     }
 
 

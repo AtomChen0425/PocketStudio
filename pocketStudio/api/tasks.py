@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from pocketStudio.api.errors import not_found
+from pocketStudio.api.payloads import task_payload, task_response
 from pocketStudio.core.dependencies import get_project_service, get_task_service
 from pocketStudio.models import Task, TaskCreate
 from pocketStudio.services.project_service import ProjectService
@@ -28,7 +29,8 @@ def create_task(
     service: TaskService = Depends(get_task_service),
     projects: ProjectService = Depends(get_project_service),
 ) -> dict:
-    return _task_response(service.create(payload), projects)
+    task = service.create(payload)
+    return task_response(task, projects.comment_count(task.id))
 
 
 @router.get("/{task_id}")
@@ -38,7 +40,8 @@ def get_task(
     projects: ProjectService = Depends(get_project_service),
 ) -> dict:
     try:
-        return _task_payload(service.get(task_id), projects)
+        task = service.get(task_id)
+        return task_payload(task, projects.comment_count(task.id))
     except KeyError as exc:
         raise not_found(exc) from exc
 
@@ -58,7 +61,8 @@ def update_task(
         if "projectId" in payload and "project_id" not in payload:
             payload["project_id"] = payload.pop("projectId")
         merged.update(payload)
-        return _task_response(service.update(task_id, TaskCreate(**merged)), projects)
+        task = service.update(task_id, TaskCreate(**merged))
+        return task_response(task, projects.comment_count(task.id))
     except KeyError as exc:
         raise not_found(exc) from exc
 
@@ -78,17 +82,3 @@ def delete_task(task_id: int, service: TaskService = Depends(get_task_service)) 
     except KeyError as exc:
         raise not_found(exc) from exc
     return {"ok": True}
-
-
-def _task_response(task: Task, projects: ProjectService) -> dict:
-    payload = _task_payload(task, projects)
-    return {**payload, "ok": True, "task": payload}
-
-
-def _task_payload(task: Task, projects: ProjectService) -> dict:
-    payload = task.model_dump(mode="json")
-    payload["assigneeType"] = task.assignee_type or ("agent" if task.assignee else "")
-    payload["projectId"] = task.project_id
-    payload["sortOrder"] = task.position
-    payload["commentCount"] = projects.comment_count(task.id)
-    return payload
