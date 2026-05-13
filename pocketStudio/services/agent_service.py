@@ -88,12 +88,14 @@ class AgentService:
     def ensure_workspace(self, workspace: Path, payload: AgentCreate | None = None) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         (workspace / ".pocketStudio").mkdir(exist_ok=True)
-        (workspace / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
+        skills_dir = workspace / ".agents" / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        self._sync_root_skills(skills_dir)
         (workspace / ".claude").mkdir(exist_ok=True)
         (workspace / ".codex").mkdir(exist_ok=True)
         (workspace / "memory").mkdir(exist_ok=True)
-        self.ensure_tool_skills_link(workspace / ".agents" / "skills", workspace / ".claude" / "skills")
-        self.ensure_tool_skills_link(workspace / ".agents" / "skills", workspace / ".codex" / "skills")
+        self.ensure_tool_skills_link(skills_dir, workspace / ".claude" / "skills")
+        self.ensure_tool_skills_link(skills_dir, workspace / ".codex" / "skills")
         agents_md = workspace / "AGENTS.md"
         if not agents_md.exists():
             agents_md.write_text("", encoding="utf-8")
@@ -346,6 +348,16 @@ class AgentService:
             destination = target / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, destination)
+
+    def _sync_root_skills(self, target: Path) -> None:
+        source = self._root_skills_dir()
+        if not source.exists():
+            return
+        self._sync_skill_tree(source, target)
+
+    @staticmethod
+    def _root_skills_dir() -> Path:
+        return Path(__file__).resolve().parents[2] / ".agents" / "skills"
 
     @staticmethod
     def _workspace_checks(workspace: Path) -> list[dict]:

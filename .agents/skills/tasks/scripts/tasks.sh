@@ -1,241 +1,249 @@
 #!/usr/bin/env bash
-# tasks.sh — Manage TinyAGI kanban tasks via the REST API.
-#
-# Usage:
-#   tasks.sh list     [--mine] [--status STATUS]
-#   tasks.sh update   TASK_ID --status STATUS
-#   tasks.sh create   --title "TITLE" [--description "DESC"] [--assignee ID] [--assignee-type agent|team]
-#   tasks.sh comment  TASK_ID --content "MESSAGE"
-#   tasks.sh comments TASK_ID
+# tasks.sh - manage pocketStudio tasks through the REST API.
 
 set -euo pipefail
 
-API_PORT="${TINYAGI_API_PORT:-3777}"
-API_BASE="http://localhost:${API_PORT}"
-AGENT_ID="${TINYAGI_AGENT_ID:-}"
-
-# ────────────────────────────────────────────
-# Helpers
-# ────────────────────────────────────────────
+API_BASE="${POCKETSTUDIO_API_BASE:-http://127.0.0.1:3777/api}"
+AGENT_ID="${POCKETSTUDIO_AGENT_ID:-${TINYAGI_AGENT_ID:-}}"
+AGENT_NAME="${POCKETSTUDIO_AGENT_NAME:-${AGENT_ID:-Agent}}"
 
 usage() {
     cat <<'USAGE'
-tasks.sh — manage TinyAGI kanban tasks
+tasks.sh - manage pocketStudio tasks
 
 Commands:
-  list      List tasks (optionally filtered)
-  update    Update a task's status
-  create    Create a new task (always in backlog)
-  comment   Add a comment to a task
-  comments  List comments on a task
+  list [--mine] [--status STATUS] [--assignee ID] [--project PROJECT_ID] [--query TEXT]
+  get TASK_ID
+  create --title TITLE [--description DESC] [--status STATUS] [--assignee ID] [--assignee-type TYPE] [--project PROJECT_ID]
+  update TASK_ID [--title TITLE] [--description DESC] [--status STATUS] [--assignee ID] [--assignee-type TYPE] [--project PROJECT_ID] [--clear-assignee] [--clear-project]
+  status TASK_ID STATUS
+  delete TASK_ID
+  comment TASK_ID --content MESSAGE [--author NAME] [--author-type TYPE]
+  comments TASK_ID
+  delete-comment COMMENT_ID
+  reorder JSON_COLUMNS
 
-List flags:
-  --mine              Only show tasks assigned to you
-  --status STATUS     Filter by status (backlog, todo, in_progress, review, done)
-
-Update args:
-  TASK_ID             The task ID to update (required, first positional arg)
-  --status STATUS     New status (required)
-
-Create flags:
-  --title "TITLE"           Task title (required)
-  --description "DESC"      Task description (optional)
-  --assignee ID             Assignee agent/team ID (optional, defaults to self)
-  --assignee-type TYPE      "agent" or "team" (default: agent)
-
-Comment args:
-  TASK_ID             The task ID to comment on (required, first positional arg)
-  --content "MSG"     Comment content (required)
-
-Comments args:
-  TASK_ID             The task ID to list comments for (required, first positional arg)
+Environment:
+  POCKETSTUDIO_API_BASE   API base URL, default http://127.0.0.1:3777/api
+  POCKETSTUDIO_AGENT_ID   Current agent id for --mine and default comment author
+  POCKETSTUDIO_AGENT_NAME Optional display name for comments
 
 Examples:
-  tasks.sh list --mine
-  tasks.sh update task_123_abc --status done
-  tasks.sh create --title "Fix auth bug" --description "Login fails on mobile"
-  tasks.sh comment task_123_abc --content "Found the root cause in auth.ts"
-  tasks.sh comments task_123_abc
+  tasks.sh list --mine --status in_progress
+  tasks.sh create --title "Fix auth bug" --project platform
+  tasks.sh update 123 --status review --assignee reviewer --assignee-type agent
+  tasks.sh status 123 done
+  tasks.sh comment 123 --content "Completed and verified with tests."
 USAGE
     exit 1
 }
 
-die() { echo "ERROR: $*" >&2; exit 1; }
-
-# ────────────────────────────────────────────
-# Commands
-# ────────────────────────────────────────────
-
-cmd_list() {
-    local filter_mine=false filter_status=""
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --mine)   filter_mine=true; shift ;;
-            --status) filter_status="$2"; shift 2 ;;
-            *) die "Unknown flag: $1" ;;
-        esac
-    done
-
-    local result
-    result=$(curl -sf "${API_BASE}/api/tasks") || die "Failed to reach API at ${API_BASE}"
-
-    local jq_filter="."
-
-    if $filter_mine; then
-        [[ -z "$AGENT_ID" ]] && die "--mine requires TINYAGI_AGENT_ID to be set"
-        jq_filter="${jq_filter} | map(select(.assignee == \"${AGENT_ID}\"))"
-    fi
-
-    if [[ -n "$filter_status" ]]; then
-        jq_filter="${jq_filter} | map(select(.status == \"${filter_status}\"))"
-    fi
-
-    echo "$result" | jq -r "${jq_filter} | .[] | \"[\(.status)] \(.id)  \(.title)  (assignee: \(.assignee | if . == \"\" then \"unassigned\" else . end))\""
-
-    local count
-    count=$(echo "$result" | jq -r "${jq_filter} | length")
-    echo "---"
-    echo "${count} task(s)"
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
 }
 
-cmd_update() {
-    [[ $# -lt 1 ]] && die "Task ID is required as first argument"
-    local task_id="$1"; shift
-    local status=""
+require_jq() {
+    command -v jq >/dev/null 2>&1 || die "jq is required"
+}
 
+api_get() {
+    curl -sf "$1"
+}
+
+api_json() {
+    local method="$1"
+    local url="$2"
+    local body="${3:-{}}"
+    curl -sf -X "$method" "$url" -H 'Content-Type: application/json' -d "$body"
+}
+
+json_string_or_null() {
+    local value="$1"
+    if [[ -z "$value" ]]; then
+        printf 'null'
+    else
+        jq -Rn --arg value "$value" '$value'
+    fi
+}
+
+cmd_list() {
+    require_jq
+    local mine=false status="" assignee="" project="" query=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --mine) mine=true; shift ;;
             --status) status="$2"; shift 2 ;;
-            *) die "Unknown flag: $1" ;;
+            --assignee) assignee="$2"; shift 2 ;;
+            --project|--project-id) project="$2"; shift 2 ;;
+            --query|-q) query="$2"; shift 2 ;;
+            *) die "Unknown list flag: $1" ;;
         esac
     done
+    if $mine; then
+        [[ -n "$AGENT_ID" ]] || die "--mine requires POCKETSTUDIO_AGENT_ID"
+        assignee="$AGENT_ID"
+    fi
 
-    [[ -z "$status" ]] && die "--status is required"
+    local params=()
+    [[ -n "$status" ]] && params+=("status=${status}")
+    [[ -n "$assignee" ]] && params+=("assignee=${assignee}")
+    [[ -n "$project" ]] && params+=("projectId=${project}")
+    [[ -n "$query" ]] && params+=("q=${query}")
 
-    case "$status" in
-        backlog|todo|in_progress|review|done) ;;
-        *) die "Invalid status: $status. Must be one of: backlog, todo, in_progress, review, done" ;;
-    esac
+    local url="${API_BASE}/tasks"
+    if [[ ${#params[@]} -gt 0 ]]; then
+        local joined
+        joined=$(IFS='&'; echo "${params[*]}")
+        url="${url}?${joined}"
+    fi
 
     local result
-    result=$(curl -sf -X PUT "${API_BASE}/api/tasks/${task_id}" \
-        -H 'Content-Type: application/json' \
-        -d "{\"status\":\"${status}\"}") || die "Failed to update task ${task_id}"
+    result=$(api_get "$url") || die "Failed to list tasks from ${url}"
+    echo "$result" | jq -r '.[] | "[\(.status)] \(.id) \(.identifier // "")  \(.title)  project=\(.projectId // "-") assignee=\(.assignee // "-") comments=\(.commentCount // 0)"'
+    echo "---"
+    echo "$result" | jq -r 'length | "\(.) task(s)"'
+}
 
-    echo "Task ${task_id} updated to: ${status}"
+cmd_get() {
+    require_jq
+    [[ $# -ge 1 ]] || die "Task ID is required"
+    api_get "${API_BASE}/tasks/$1" | jq .
+}
+
+build_task_payload() {
+    local title="$1" description="$2" status="$3" assignee="$4" assignee_type="$5" project="$6" clear_assignee="$7" clear_project="$8"
+    jq -n \
+        --arg title "$title" \
+        --arg description "$description" \
+        --arg status "$status" \
+        --arg assignee "$assignee" \
+        --arg assigneeType "$assignee_type" \
+        --arg projectId "$project" \
+        --argjson clearAssignee "$clear_assignee" \
+        --argjson clearProject "$clear_project" \
+        '{
+            title: (if $title == "" then empty else $title end),
+            description: (if $description == "" then empty else $description end),
+            status: (if $status == "" then empty else $status end),
+            assignee: (if $clearAssignee then null elif $assignee == "" then empty else $assignee end),
+            assigneeType: (if $clearAssignee then "" elif $assigneeType == "" then empty else $assigneeType end),
+            projectId: (if $clearProject then null elif $projectId == "" then empty else $projectId end)
+        }'
 }
 
 cmd_create() {
-    local title="" description="" assignee="" assignee_type="agent"
-
+    require_jq
+    local title="" description="" status="todo" assignee="" assignee_type="agent" project=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --title)         title="$2"; shift 2 ;;
-            --description)   description="$2"; shift 2 ;;
-            --assignee)      assignee="$2"; shift 2 ;;
-            --assignee-type) assignee_type="$2"; shift 2 ;;
-            *) die "Unknown flag: $1" ;;
+            --title) title="$2"; shift 2 ;;
+            --description) description="$2"; shift 2 ;;
+            --status) status="$2"; shift 2 ;;
+            --assignee) assignee="$2"; shift 2 ;;
+            --assignee-type|--assigneeType) assignee_type="$2"; shift 2 ;;
+            --project|--project-id|--projectId) project="$2"; shift 2 ;;
+            *) die "Unknown create flag: $1" ;;
         esac
     done
-
-    [[ -z "$title" ]] && die "--title is required"
-
-    # Default assignee to self
+    [[ -n "$title" ]] || die "--title is required"
     if [[ -z "$assignee" && -n "$AGENT_ID" ]]; then
         assignee="$AGENT_ID"
         assignee_type="agent"
     fi
-
-    # Build JSON payload
     local payload
-    payload=$(jq -n \
-        --arg title "$title" \
-        --arg description "$description" \
-        --arg assignee "$assignee" \
-        --arg assigneeType "$assignee_type" \
-        --arg status "backlog" \
-        '{title: $title, description: $description, assignee: $assignee, assigneeType: $assigneeType, status: $status}')
+    payload=$(build_task_payload "$title" "$description" "$status" "$assignee" "$assignee_type" "$project" false false)
+    api_json POST "${API_BASE}/tasks" "$payload" | jq .
+}
 
-    local result
-    result=$(curl -sf -X POST "${API_BASE}/api/tasks" \
-        -H 'Content-Type: application/json' \
-        -d "$payload") || die "Failed to create task"
+cmd_update() {
+    require_jq
+    [[ $# -ge 1 ]] || die "Task ID is required"
+    local task_id="$1"; shift
+    local title="" description="" status="" assignee="" assignee_type="" project="" clear_assignee=false clear_project=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --title) title="$2"; shift 2 ;;
+            --description) description="$2"; shift 2 ;;
+            --status) status="$2"; shift 2 ;;
+            --assignee) assignee="$2"; shift 2 ;;
+            --assignee-type|--assigneeType) assignee_type="$2"; shift 2 ;;
+            --project|--project-id|--projectId) project="$2"; shift 2 ;;
+            --clear-assignee) clear_assignee=true; shift ;;
+            --clear-project) clear_project=true; shift ;;
+            *) die "Unknown update flag: $1" ;;
+        esac
+    done
+    local payload
+    payload=$(build_task_payload "$title" "$description" "$status" "$assignee" "$assignee_type" "$project" "$clear_assignee" "$clear_project")
+    api_json PUT "${API_BASE}/tasks/${task_id}" "$payload" | jq .
+}
 
-    local task_id
-    task_id=$(echo "$result" | jq -r '.task.id')
-    echo "Task created: ${task_id} — ${title}"
+cmd_status() {
+    require_jq
+    [[ $# -ge 2 ]] || die "Usage: tasks.sh status TASK_ID STATUS"
+    api_json PATCH "${API_BASE}/tasks/$1/status/$2" | jq .
+}
+
+cmd_delete() {
+    require_jq
+    [[ $# -ge 1 ]] || die "Task ID is required"
+    api_json DELETE "${API_BASE}/tasks/$1" | jq .
 }
 
 cmd_comment() {
-    [[ $# -lt 1 ]] && die "Task ID is required as first argument"
+    require_jq
+    [[ $# -ge 1 ]] || die "Task ID is required"
     local task_id="$1"; shift
-    local content=""
-
+    local content="" author="$AGENT_NAME" author_type="agent"
+    [[ -n "$AGENT_ID" ]] || author_type="user"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --content) content="$2"; shift 2 ;;
-            *) die "Unknown flag: $1" ;;
+            --author) author="$2"; shift 2 ;;
+            --author-type|--authorType) author_type="$2"; shift 2 ;;
+            *) die "Unknown comment flag: $1" ;;
         esac
     done
-
-    [[ -z "$content" ]] && die "--content is required"
-
-    local author="${AGENT_ID:-User}"
-    local author_type="agent"
-    [[ -z "$AGENT_ID" ]] && author_type="user"
-
+    [[ -n "$content" ]] || die "--content is required"
     local payload
-    payload=$(jq -n \
-        --arg author "$author" \
-        --arg authorType "$author_type" \
-        --arg content "$content" \
-        '{author: $author, authorType: $authorType, content: $content}')
-
-    local result
-    result=$(curl -sf -X POST "${API_BASE}/api/tasks/${task_id}/comments" \
-        -H 'Content-Type: application/json' \
-        -d "$payload") || die "Failed to add comment to task ${task_id}"
-
-    local comment_id
-    comment_id=$(echo "$result" | jq -r '.comment.id')
-    echo "Comment added to task ${task_id}: ${comment_id}"
+    payload=$(jq -n --arg author "$author" --arg authorType "$author_type" --arg content "$content" '{author: $author, authorType: $authorType, content: $content}')
+    api_json POST "${API_BASE}/tasks/${task_id}/comments" "$payload" | jq .
 }
 
 cmd_comments() {
-    [[ $# -lt 1 ]] && die "Task ID is required as first argument"
-    local task_id="$1"; shift
-
-    local result
-    result=$(curl -sf "${API_BASE}/api/tasks/${task_id}/comments") || die "Failed to fetch comments for task ${task_id}"
-
-    local count
-    count=$(echo "$result" | jq -r 'length')
-
-    if [[ "$count" -eq 0 ]]; then
-        echo "No comments on task ${task_id}"
-        return
-    fi
-
-    echo "$result" | jq -r '.[] | "[\(.authorType)] \(.author) (\(.createdAt | . / 1000 | strftime("%Y-%m-%d %H:%M"))):\n  \(.content)\n"'
-    echo "---"
-    echo "${count} comment(s)"
+    require_jq
+    [[ $# -ge 1 ]] || die "Task ID is required"
+    api_get "${API_BASE}/tasks/$1/comments" | jq .
 }
 
-# ────────────────────────────────────────────
-# Main
-# ────────────────────────────────────────────
+cmd_delete_comment() {
+    require_jq
+    [[ $# -ge 1 ]] || die "Comment ID is required"
+    api_json DELETE "${API_BASE}/comments/$1" | jq .
+}
 
-[[ $# -lt 1 ]] && usage
+cmd_reorder() {
+    require_jq
+    [[ $# -ge 1 ]] || die "JSON column map is required"
+    api_json PUT "${API_BASE}/tasks/reorder" "$1" | jq .
+}
 
-COMMAND="$1"; shift
+[[ $# -ge 1 ]] || usage
+command="$1"
+shift || true
 
-case "$COMMAND" in
-    list)     cmd_list "$@" ;;
-    update)   cmd_update "$@" ;;
-    create)   cmd_create "$@" ;;
-    comment)  cmd_comment "$@" ;;
+case "$command" in
+    list) cmd_list "$@" ;;
+    get) cmd_get "$@" ;;
+    create) cmd_create "$@" ;;
+    update) cmd_update "$@" ;;
+    status) cmd_status "$@" ;;
+    delete) cmd_delete "$@" ;;
+    comment) cmd_comment "$@" ;;
     comments) cmd_comments "$@" ;;
+    delete-comment) cmd_delete_comment "$@" ;;
+    reorder) cmd_reorder "$@" ;;
     help|-h|--help) usage ;;
-    *) die "Unknown command: $COMMAND. Use list, update, create, comment, or comments." ;;
+    *) die "Unknown command: $command" ;;
 esac

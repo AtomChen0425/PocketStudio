@@ -746,6 +746,8 @@ Class, data model, service object, or exception type.
 | `ensure_tool_skills_link(source: Path, target: Path)` | Validates input or repairs required runtime state. |
 | `_ensure_claude_skills_link(workspace: Path)` | Validates input or repairs required runtime state. |
 | `_sync_skill_tree(source: Path, target: Path)` | Helper method for its service or type. |
+| `_sync_root_skills(self, target: Path)` | Helper method for its service or type. |
+| `_root_skills_dir()` | Helper method for its service or type. |
 | `_workspace_checks(workspace: Path)` | Helper method for its service or type. |
 | `_safe_name(value: str)` | Helper method for its service or type. |
 | `_resolve_memory_path(memory_dir: Path, relative_path: str)` | Helper method for its service or type. |
