@@ -379,7 +379,11 @@ class Orchestrator:
             raise ValueError(f"Agent '{agent.id}' is disabled")
         provider = self.providers.get(agent.provider)
         self.events.emit("agent.started", {"agent_id": agent.id, "provider": agent.provider})
-        response = await provider.run(ProviderRequest(agent=agent, input=input_text, context=context))
+
+        def progress(payload: dict) -> None:
+            self.events.emit("agent.progress", {"agent_id": agent.id, "provider": agent.provider, **payload})
+
+        response = await provider.run(ProviderRequest(agent=agent, input=input_text, context=context, progress=progress))
         process = (response.raw or {}).get("process") if response.raw else None
         if process:
             self.events.emit("agent.process", {"agent_id": agent.id, "provider": agent.provider, "process": process})

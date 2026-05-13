@@ -24,6 +24,20 @@ def test_office_event_maps_queue_agent_response_and_team_events() -> None:
     failed = events.office_event(events.emit("message.failed", {"message_id": 1, "status": "failed", "error": "boom"}))
     started = events.office_event(events.emit("agent.started", {"agent_id": "a", "provider": "local"}))
     process = events.office_event(events.emit("agent.process", {"agent_id": "a", "process": {"pid": 123}}))
+    progress = events.office_event(
+        events.emit(
+            "agent.progress",
+            {
+                "agent_id": "a",
+                "provider": "codex",
+                "providerEventType": "item.started",
+                "summary": "running command",
+                "content": "stdout",
+                "tool": "shell",
+                "raw": {"type": "item.started"},
+            },
+        )
+    )
     completed = events.office_event(events.emit("agent.completed", {"agent_id": "a", "content": "done"}))
     response = events.office_event(
         events.emit(
@@ -42,6 +56,12 @@ def test_office_event_maps_queue_agent_response_and_team_events() -> None:
     assert started[0] == "agent:invoke"
     assert process[0] == "agent:progress"
     assert process[1]["process"]["pid"] == 123
+    assert progress[0] == "agent:progress"
+    assert progress[1]["provider"] == "codex"
+    assert progress[1]["providerEventType"] == "item.started"
+    assert progress[1]["summary"] == "running command"
+    assert progress[1]["content"] == "stdout"
+    assert progress[1]["tool"] == "shell"
     assert completed[0] == "agent:response"
     assert response[0] == "response:queued"
     assert response[1]["senderId"] == "web-1"

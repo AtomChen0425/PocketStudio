@@ -571,3 +571,33 @@ def test_agent_process_metadata_is_emitted_as_core_event() -> None:
         assert process_events[0].payload["process"]["pid"] == 123
     finally:
         shutil.rmtree(home, ignore_errors=True)
+
+
+def test_agent_progress_callback_is_emitted_as_core_event() -> None:
+    class ProgressProvider(AgentProvider):
+        name = "progress-provider"
+
+        async def run(self, request: ProviderRequest) -> ProviderResponse:
+            if request.progress:
+                request.progress({"providerEventType": "item.started", "summary": "working", "tool": "shell"})
+            return ProviderResponse(text="done")
+
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        orchestrator.providers.register(ProgressProvider())
+        orchestrator.agents.create(AgentCreate(id="runner", name="Runner", role="Runs", provider="progress-provider"))
+
+        message = orchestrator.enqueue(MessageCreate(target="@agent:runner", content="Run it"))
+        asyncio.run(orchestrator.process_message(message.id))
+        events = orchestrator.events.list(limit=20)
+
+        progress_events = [event for event in events if event.type == "agent.progress"]
+        assert progress_events
+        assert progress_events[0].payload["agent_id"] == "runner"
+        assert progress_events[0].payload["provider"] == "progress-provider"
+        assert progress_events[0].payload["providerEventType"] == "item.started"
+        assert progress_events[0].payload["summary"] == "working"
+        assert progress_events[0].payload["tool"] == "shell"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)

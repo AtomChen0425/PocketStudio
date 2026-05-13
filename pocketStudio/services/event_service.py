@@ -112,6 +112,19 @@ class EventService:
                 "process": payload.get("process", {}),
             }
             return data["type"], data
+        if event.type == "agent.progress":
+            data = {
+                **base,
+                "type": "agent:progress",
+                "agentId": payload.get("agent_id", ""),
+                "provider": payload.get("provider", ""),
+                "providerEventType": payload.get("providerEventType", ""),
+                "summary": payload.get("summary", ""),
+                "content": payload.get("content", ""),
+                "tool": payload.get("tool"),
+                "raw": payload.get("raw", {}),
+            }
+            return data["type"], data
         if event.type == "agent.completed":
             data = {
                 **base,

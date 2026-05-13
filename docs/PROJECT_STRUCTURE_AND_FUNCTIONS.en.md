@@ -617,6 +617,12 @@ Class, data model, service object, or exception type.
 | `_skill_context(workspace: Path)` | Helper method for its service or type. |
 | `_extract_text(cls, stdout: str)` | Converts, parses, or formats internal data. |
 | `_extract_event_text(line: str)` | Converts, parses, or formats internal data. |
+| `_parse_event(line: str)` | Converts, parses, or formats internal data. |
+| `_extract_event_text_from_event(event: dict \| None)` | Converts, parses, or formats internal data. |
+| `_progress_payload(cls, event: dict)` | Builds API or compatibility-layer response/request payloads. |
+| `_tool_name(event: dict, item: dict)` | Helper method for its service or type. |
+| `_event_summary(event_type: str, item: dict, content: str, tool: str \| None)` | Helper method for its service or type. |
+| `_compact_event(event: dict)` | Helper method for its service or type. |
 | `is_alive(self, agent_id: str)` | Helper method for its service or type. |
 | `async kill_agent(self, agent_id: str)` | Helper method for its service or type. |
 
