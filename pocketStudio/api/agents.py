@@ -18,6 +18,40 @@ def upsert_agent(payload: AgentCreate, service: AgentService = Depends(get_agent
     return service.create(payload)
 
 
+@router.put("/{agent_id}")
+def update_agent(agent_id: str, payload: dict, service: AgentService = Depends(get_agent_service)) -> dict:
+    try:
+        current = service.get(agent_id)
+        is_new = False
+    except KeyError:
+        current = None
+        is_new = True
+
+    heartbeat = payload.get("heartbeat") or {}
+    system_prompt = payload.get("system_prompt")
+    role = payload.get("role") or system_prompt or (current.role if current else payload.get("name") or agent_id)
+    agent = service.create(
+        AgentCreate(
+            id=agent_id,
+            name=payload.get("name") or (current.name if current else agent_id),
+            role=role,
+            system_prompt=system_prompt if system_prompt is not None else (current.system_prompt if current else ""),
+            provider=payload.get("provider") or (current.provider if current else "local"),
+            model=payload.get("model") if "model" in payload else (current.model if current else None),
+            workspace=payload.get("working_directory") or payload.get("workspace") or (current.workspace if current else None),
+            enabled=payload.get("enabled", current.enabled if current else True),
+            heartbeat_enabled=heartbeat.get("enabled", payload.get("heartbeat_enabled", current.heartbeat_enabled if current else True)),
+            heartbeat_interval=heartbeat.get(
+                "interval",
+                payload.get("heartbeat_interval", current.heartbeat_interval if current else None),
+            ),
+        )
+    )
+    if system_prompt is not None:
+        service.save_system_prompt_file(agent_id, system_prompt)
+    return {"ok": True, "agent": _agent_config_payload(agent), "provisioned": is_new}
+
+
 @router.get("/{agent_id}", response_model=Agent)
 def get_agent(agent_id: str, service: AgentService = Depends(get_agent_service)) -> Agent:
     try:
@@ -30,3 +64,14 @@ def get_agent(agent_id: str, service: AgentService = Depends(get_agent_service))
 def delete_agent(agent_id: str, service: AgentService = Depends(get_agent_service)) -> dict:
     service.delete(agent_id)
     return {"ok": True}
+
+
+def _agent_config_payload(agent: Agent) -> dict:
+    return {
+        "name": agent.name,
+        "provider": agent.provider,
+        "model": agent.model or "",
+        "working_directory": str(agent.workspace),
+        "system_prompt": agent.system_prompt or agent.role,
+        "heartbeat": {"enabled": agent.heartbeat_enabled, "interval": agent.heartbeat_interval},
+    }

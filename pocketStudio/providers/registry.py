@@ -45,6 +45,8 @@ class ProviderRegistry:
             return
         rows = self.db.fetch_all("SELECT * FROM custom_providers ORDER BY id")
         for row in rows:
+            if row["id"] in self.BUILTIN_PROVIDERS:
+                continue
             if row["harness"] == "codex":
                 command = row["base_url"] or ""
                 provider = codex_provider_from_command(command, self.processes) if command else CodexProvider(registry=self.processes)

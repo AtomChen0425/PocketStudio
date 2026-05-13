@@ -18,6 +18,28 @@ def upsert_team(payload: TeamCreate, service: TeamService = Depends(get_team_ser
     return service.create(payload)
 
 
+@router.put("/{team_id}")
+def update_team(team_id: str, payload: dict, service: TeamService = Depends(get_team_service)) -> dict:
+    try:
+        current = service.get(team_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    merged = current.model_dump()
+    merged.update(
+        {
+            "id": team_id,
+            "name": payload.get("name", current.name),
+            "mode": payload.get("mode", current.mode),
+            "agent_ids": payload.get("agent_ids") or payload.get("agents") or current.agent_ids,
+            "leader_agent": payload.get("leader_agent") or payload.get("leaderAgent") or current.leader_agent,
+            "max_rounds": payload.get("max_rounds") or payload.get("maxRounds") or current.max_rounds,
+            "stop_when_idle": payload.get("stop_when_idle", payload.get("stopWhenIdle", current.stop_when_idle)),
+        }
+    )
+    team = service.create(TeamCreate(**merged))
+    return {"ok": True, "team": team.model_dump()}
+
+
 @router.get("/{team_id}", response_model=Team)
 def get_team(team_id: str, service: TeamService = Depends(get_team_service)) -> Team:
     try:

@@ -62,7 +62,7 @@ class ProjectService:
         existing = self.get_project(project_id)
         prefix = payload.prefix or existing.prefix or self.generate_prefix(payload.name)
         color = payload.color or existing.color or self.PROJECT_COLORS[0]
-        workspace = self._workspace_path(payload.workspace or existing.workspace)
+        workspace = self._workspace_path(payload.workspace)
         if workspace is not None:
             self.ensure_working_directory(workspace)
         self.db.execute(
@@ -138,6 +138,7 @@ class ProjectService:
         return result
 
     def delete_project(self, project_id: str) -> None:
+        self.get_project(project_id)
         task_rows = self.db.fetch_all("SELECT id FROM tasks WHERE project_id = ? ORDER BY id ASC", (project_id,))
         for row in task_rows:
             next_number = self._next_global_task_number()
@@ -156,6 +157,10 @@ class ProjectService:
 
     def task_count(self, project_id: str) -> int:
         row = self.db.fetch_one("SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?", (project_id,))
+        return int(row["count"]) if row else 0
+
+    def comment_count(self, task_id: int) -> int:
+        row = self.db.fetch_one("SELECT COUNT(*) AS count FROM task_comments WHERE task_id = ?", (task_id,))
         return int(row["count"]) if row else 0
 
     def list_comments(self, task_id: int) -> list[TaskComment]:
@@ -177,6 +182,9 @@ class ProjectService:
         return comment
 
     def delete_comment(self, comment_id: str) -> None:
+        row = self.db.fetch_one("SELECT id FROM task_comments WHERE id = ?", (comment_id,))
+        if row is None:
+            raise KeyError(f"Comment '{comment_id}' not found")
         self.db.execute("DELETE FROM task_comments WHERE id = ?", (comment_id,))
         self.events.emit("task.comment.deleted", {"comment_id": comment_id})
 

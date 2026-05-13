@@ -60,9 +60,55 @@ def test_settings_queue_agent_messages_and_responses() -> None:
     history = history_response.json()
     assert {item["role"] for item in history} == {"user", "assistant"}
 
+    all_history_response = client.get("/api/agent-messages?limit=10")
+    assert all_history_response.status_code == 200
+    all_history = all_history_response.json()
+    assert any(item["agent_id"] == agent_id and item["role"] == "user" for item in all_history)
+    assert any(item["agent_id"] == agent_id and item["role"] == "assistant" for item in all_history)
+
+    newest_seen = max(item["id"] for item in all_history)
+    filtered_history = client.get(f"/api/agent-messages?since_id={newest_seen}")
+    assert filtered_history.status_code == 200
+    assert all(item["id"] > newest_seen for item in filtered_history.json())
+
     responses_response = client.get("/api/responses?limit=10")
     assert responses_response.status_code == 200
     assert any(item.get("agent") == agent_id for item in responses_response.json())
+
+
+def test_api_message_rejects_duplicate_client_message_id_without_changing_queue_id_contract() -> None:
+    client = TestClient(app)
+    agent_id = unique("idempotent-agent")
+    client.post("/api/agents", json={"id": agent_id, "name": "Idempotent", "role": "Dedupes", "provider": "local"})
+    client_message_id = unique("client-msg")
+
+    first = client.post(
+        "/api/message",
+        json={
+            "message": f"@{agent_id} hello once",
+            "sender": "Tester",
+            "channel": "web",
+            "messageId": client_message_id,
+        },
+    )
+    second = client.post(
+        "/api/message",
+        json={
+            "message": f"@{agent_id} hello again",
+            "sender": "Tester",
+            "channel": "web",
+            "messageId": client_message_id,
+        },
+    )
+
+    assert first.status_code == 200
+    assert first.json()["clientMessageId"] == client_message_id
+    assert first.json()["messageId"] == str(first.json()["queueId"])
+    queued = client.get(f"/api/queue/{first.json()['messageId']}").json()
+    assert queued["metadata"]["clientMessageId"] == client_message_id
+    assert queued["metadata"]["messageId"] == client_message_id
+    assert second.status_code == 409
+    assert second.json() == {"error": "duplicate messageId", "messageId": client_message_id}
 
 
 def test_projects_comments_and_schedules() -> None:
@@ -140,6 +186,32 @@ def test_custom_providers_are_persisted_and_registered() -> None:
     assert provider_id in settings_response.json()["models"]["custom_providers"]
 
 
+def test_custom_provider_cannot_shadow_builtin_local_provider() -> None:
+    client = TestClient(app)
+    save_response = client.put(
+        "/api/custom-providers/local",
+        json={
+            "name": "Shadow Local",
+            "harness": "openai",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "",
+            "model": "shadow-model",
+        },
+    )
+    assert save_response.status_code == 200
+
+    agent_id = unique("shadow-local")
+    client.post("/api/agents", json={"id": agent_id, "name": "Shadow Local", "role": "Dry run", "provider": "local"})
+    message_id = client.post(
+        "/api/messages",
+        json={"target": f"@agent:{agent_id}", "content": "use builtin local", "sender": "test"},
+    ).json()["id"]
+    processed = client.post(f"/api/messages/{message_id}/process")
+
+    assert processed.status_code == 200
+    assert "Configure an OpenAI-compatible provider" in processed.json()["output"]
+
+
 def test_task_reorder_persists_status_and_position() -> None:
     client = TestClient(app)
     first = client.post("/api/tasks", json={"title": unique("First"), "status": "todo"}).json()
@@ -158,6 +230,37 @@ def test_task_reorder_persists_status_and_position() -> None:
         (second["id"], "review", 0),
         (first["id"], "review", 1),
     ]
+
+
+def test_task_routes_keep_top_level_shape_and_add_upstream_envelope() -> None:
+    client = TestClient(app)
+    created = client.post(
+        "/api/tasks",
+        json={"title": unique("Envelope task"), "description": "shape", "status": "todo"},
+    )
+    task_id = created.json()["id"]
+    comment = client.post(
+        f"/api/tasks/{task_id}/comments",
+        json={"author": "Tester", "authorType": "user", "content": "shape comment"},
+    )
+    updated = client.put(
+        f"/api/tasks/{task_id}",
+        json={"title": "Envelope task updated", "assignee": "agent-a", "assigneeType": "agent"},
+    )
+    fetched = client.get(f"/api/tasks/{task_id}")
+
+    assert created.status_code == 200
+    assert created.json()["ok"] is True
+    assert created.json()["task"]["id"] == task_id
+    assert created.json()["title"] == created.json()["task"]["title"]
+    assert comment.status_code == 200
+    assert updated.status_code == 200
+    assert updated.json()["ok"] is True
+    assert updated.json()["task"]["assigneeType"] == "agent"
+    assert updated.json()["assignee_type"] == "agent"
+    assert fetched.status_code == 200
+    assert fetched.json()["id"] == task_id
+    assert fetched.json()["commentCount"] == 1
 
 
 def test_project_prefix_and_task_identifier_follow_tinyagi_shape() -> None:
@@ -208,6 +311,39 @@ def test_project_without_workspace_reports_unconfigured_working_directory() -> N
     assert workspace_status.json()["configured"] is False
     assert workspace_status.json()["workspace"] is None
     assert workspace_status.json()["checks"] == []
+
+
+def test_project_workspace_can_be_cleared_to_restore_agent_workspace_fallback() -> None:
+    client = TestClient(app)
+    workspace = f".pytest-local/project-clear-{uuid.uuid4().hex[:8]}"
+    project_response = client.post(
+        "/api/projects",
+        json={"name": unique("Clear Workspace"), "description": "Clears cwd", "workspace": workspace},
+    )
+    assert project_response.status_code == 200
+    project = project_response.json()["project"]
+    assert Path(project["workspace"]) == Path(workspace)
+
+    cleared = client.put(f"/api/projects/{project['id']}", json={"workspace": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["project"]["workspace"] is None
+
+    workspace_status = client.get(f"/api/projects/{project['id']}/workspace")
+    assert workspace_status.status_code == 200
+    assert workspace_status.json()["configured"] is False
+    assert workspace_status.json()["workspace"] is None
+
+
+def test_project_task_comment_deletes_return_404_for_missing_ids() -> None:
+    client = TestClient(app)
+
+    missing_project = client.delete("/api/projects/missing-project-id")
+    missing_task = client.delete("/api/tasks/99999999")
+    missing_comment = client.delete("/api/comments/missing-comment-id")
+
+    assert missing_project.status_code == 404
+    assert missing_task.status_code == 404
+    assert missing_comment.status_code == 404
 
 
 def test_project_delete_detaches_tasks_and_task_filters_search_server_side() -> None:
@@ -336,6 +472,34 @@ def test_settings_validate_reports_validity_without_writing() -> None:
     assert after["monitoring"] == before["monitoring"]
 
 
+def test_settings_setup_expands_home_paths(monkeypatch) -> None:
+    client = TestClient(app)
+    fake_home = Path(".pytest-local/home-expand").resolve()
+    monkeypatch.setenv("HOME", str(fake_home))
+    agent_id = unique("home-agent")
+
+    setup = client.post(
+        "/api/setup",
+        json={
+            "workspace": {"name": "Expanded", "path": "$HOME/pocket-workspace"},
+            "agents": {
+                agent_id: {
+                    "name": "Home Agent",
+                    "provider": "local",
+                    "working_directory": "~/agents/home-agent",
+                }
+            },
+        },
+    )
+
+    assert setup.status_code == 200
+    settings = setup.json()["settings"]
+    assert Path(settings["workspace"]["path"]) == fake_home / "pocket-workspace"
+    assert Path(settings["agents"][agent_id]["working_directory"]) == fake_home / "agents" / "home-agent"
+    assert (fake_home / "pocket-workspace").is_dir()
+    assert (fake_home / "agents" / "home-agent" / "AGENTS.md").is_file()
+
+
 def test_settings_backup_info_and_restore_backup() -> None:
     client = TestClient(app)
     before_name = unique("settings-before")
@@ -397,6 +561,85 @@ def test_agent_and_team_crud_sync_to_settings_json() -> None:
     assert file_settings["teams"][team_id]["leader_agent"] == agent_id
 
 
+def test_agent_put_updates_upstream_shape_workspace_prompt_and_settings_json() -> None:
+    client = TestClient(app)
+    agent_id = unique("put-agent")
+    workspace = f".pytest-local/{agent_id}"
+
+    created = client.put(
+        f"/api/agents/{agent_id}",
+        json={
+            "name": "PUT Agent",
+            "provider": "local",
+            "model": "local-model",
+            "working_directory": workspace,
+            "system_prompt": "Use the PUT route.",
+            "heartbeat": {"enabled": False, "interval": 321},
+        },
+    )
+    updated = client.put(
+        f"/api/agents/{agent_id}",
+        json={
+            "name": "Updated PUT Agent",
+            "provider": "local",
+            "model": "",
+            "system_prompt": "Updated prompt.",
+            "heartbeat": {"enabled": True, "interval": 654},
+        },
+    )
+
+    assert created.status_code == 200
+    assert created.json()["ok"] is True
+    assert created.json()["provisioned"] is True
+    assert Path(created.json()["agent"]["working_directory"]) == Path(workspace)
+    assert updated.status_code == 200
+    assert updated.json()["provisioned"] is False
+    agent = updated.json()["agent"]
+    assert agent["name"] == "Updated PUT Agent"
+    assert agent["heartbeat"] == {"enabled": True, "interval": 654}
+    assert Path(workspace, "AGENTS.md").read_text(encoding="utf-8") == "Updated prompt."
+    file_settings = json.loads(get_settings().settings_path.read_text(encoding="utf-8"))
+    assert file_settings["agents"][agent_id]["name"] == "Updated PUT Agent"
+    assert Path(file_settings["agents"][agent_id]["working_directory"]) == Path(workspace)
+    assert file_settings["agents"][agent_id]["heartbeat"] == {"enabled": True, "interval": 654}
+
+
+def test_team_put_updates_upstream_shape_and_settings_json() -> None:
+    client = TestClient(app)
+    first_agent = unique("team-first")
+    second_agent = unique("team-second")
+    team_id = unique("put-team")
+    client.post("/api/agents", json={"id": first_agent, "name": "First", "role": "First", "provider": "local"})
+    client.post("/api/agents", json={"id": second_agent, "name": "Second", "role": "Second", "provider": "local"})
+    client.post(
+        "/api/teams",
+        json={"id": team_id, "name": "Initial Team", "mode": "chain", "agent_ids": [first_agent]},
+    )
+
+    updated = client.put(
+        f"/api/teams/{team_id}",
+        json={
+            "name": "Updated Team",
+            "agents": [first_agent, second_agent],
+            "leader_agent": second_agent,
+            "maxRounds": 3,
+            "stopWhenIdle": False,
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["ok"] is True
+    team = updated.json()["team"]
+    assert team["name"] == "Updated Team"
+    assert team["agent_ids"] == [first_agent, second_agent]
+    assert team["leader_agent"] == second_agent
+    assert team["max_rounds"] == 3
+    assert team["stop_when_idle"] is False
+    file_settings = json.loads(get_settings().settings_path.read_text(encoding="utf-8"))
+    assert file_settings["teams"][team_id]["agents"] == [first_agent, second_agent]
+    assert file_settings["teams"][team_id]["leader_agent"] == second_agent
+
+
 def test_agent_reset_clears_history_and_responses() -> None:
     client = TestClient(app)
     agent_id = unique("reset-agent")
@@ -432,3 +675,22 @@ def test_status_and_services_reflect_settings_channels() -> None:
     assert applied.status_code == 200
     assert "worker" in applied.json()["started"]
     assert any("cli" in error for error in applied.json()["errors"])
+
+
+def test_services_status_start_and_stop_routes_report_worker_state() -> None:
+    with TestClient(app) as client:
+        client.put("/api/settings", json={"channels": {"enabled": ["web", "cli"]}})
+
+        stopped = client.post("/api/services/stop")
+        status = client.get("/api/services/status")
+        started = client.post("/api/services/start")
+
+        assert stopped.status_code == 200
+        assert stopped.json()["stopped"]["worker"] in {True, False}
+        assert stopped.json()["services"]["server"]["running"] is True
+        assert status.status_code == 200
+        assert status.json()["services"]["worker"]["running"] is False
+        assert status.json()["channels"]["web"]["implemented"] is True
+        assert status.json()["channels"]["cli"]["implemented"] is False
+        assert started.status_code == 200
+        assert started.json()["services"]["worker"]["running"] is True

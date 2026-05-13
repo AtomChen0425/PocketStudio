@@ -52,8 +52,8 @@ class Orchestrator:
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
         return self.queue.enqueue(payload)
 
-    async def process_one(self) -> OrchestrationResult | None:
-        message = self.queue.next_queued()
+    async def process_one(self, newest: bool = False) -> OrchestrationResult | None:
+        message = self.queue.next_queued(newest=newest)
         if message is None:
             return None
         return await self.process_message(message.id)

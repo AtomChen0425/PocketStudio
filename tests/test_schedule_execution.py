@@ -51,6 +51,50 @@ def test_worker_fires_due_one_time_schedule() -> None:
         assert any(item["status"] == "done" for item in messages)
 
 
+def test_due_schedule_is_processed_before_existing_queue_backlog() -> None:
+    agent_id = f"priority-schedule-agent-{uuid.uuid4().hex[:8]}"
+    run_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+
+    with TestClient(app) as client:
+        client.post("/api/worker/stop")
+        client.post(
+            "/api/messages",
+            json={"target": "@agent:missing-schedule-backlog", "content": "old backlog", "sender": "test"},
+        )
+        client.post(
+            "/api/agents",
+            json={"id": agent_id, "name": "Priority Schedule Agent", "role": "Runs due work", "provider": "local"},
+        )
+        created = client.post(
+            "/api/schedules",
+            json={"agentId": agent_id, "message": "priority scheduled check", "runAt": run_at, "label": f"priority-{agent_id}"},
+        )
+        schedule_id = created.json()["schedule"]["id"]
+
+        tick = client.post("/api/worker/tick?force=true")
+
+        assert tick.status_code == 200
+        assert tick.json()["processed"] is True
+
+        schedule = next(item for item in client.get(f"/api/schedules?agent={agent_id}").json() if item["id"] == schedule_id)
+        messages = [
+            item
+            for item in client.get("/api/queue").json()
+            if item["target"] == f"@agent:{agent_id}" and item["content"] == "priority scheduled check"
+        ]
+        backlog = [
+            item
+            for item in client.get("/api/queue").json()
+            if item["target"] == "@agent:missing-schedule-backlog" and item["content"] == "old backlog"
+        ]
+
+        assert schedule["enabled"] is False
+        assert schedule["lastFiredAt"]
+        assert any(item["status"] == "done" for item in messages)
+        assert backlog
+        assert not any(item["status"] == "done" for item in backlog)
+
+
 def test_schedule_payload_includes_next_fire_preview() -> None:
     agent_id = f"preview-agent-{uuid.uuid4().hex[:8]}"
     run_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
@@ -159,6 +203,14 @@ def test_schedule_label_is_unique_and_can_delete_by_label() -> None:
 
         assert deleted.status_code == 200
         assert client.get(f"/api/schedules?agent={agent_id}").json() == []
+
+
+def test_schedule_delete_returns_404_for_missing_id_or_label() -> None:
+    with TestClient(app) as client:
+        deleted = client.delete("/api/schedules/missing-schedule-id")
+
+        assert deleted.status_code == 404
+        assert "Schedule" in deleted.json()["detail"]
 
 
 def test_schedule_validate_returns_preview_without_persisting() -> None:

@@ -77,6 +77,7 @@ export default function OfficePage() {
 
           <ConversationPanel
             agents={data.agents}
+            teams={data.teams}
             agentEntries={scene.agentEntries}
             agentHistories={data.agentHistories}
             bubbles={sse.bubbles}

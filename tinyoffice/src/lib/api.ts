@@ -275,8 +275,9 @@ export async function sendMessage(payload: {
   projectId?: string;
 }): Promise<{ ok: boolean; messageId: string }> {
   const targetMatch = payload.message.match(/^@(team:)?([a-zA-Z0-9_-]+)/);
-  const agent = payload.agent || targetMatch?.[2] || "pocketstudio";
-  const target = targetMatch?.[1] ? `@team:${agent}` : `@agent:${agent}`;
+  const explicitTeam = payload.agent?.startsWith("team:") ? payload.agent.slice("team:".length) : "";
+  const agent = explicitTeam || payload.agent || targetMatch?.[2] || "pocketstudio";
+  const target = explicitTeam || targetMatch?.[1] ? `@team:${agent}` : `@agent:${agent}`;
   const message = await apiFetch<BackendQueueMessage>("/api/messages", {
     method: "POST",
     body: JSON.stringify({
@@ -467,7 +468,7 @@ export async function postChatMessage(
 ): Promise<{ ok: boolean }> {
   await apiFetch(`/api/chatroom/${encodeURIComponent(teamId)}`, {
     method: "POST",
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ sender: "user", message }),
   });
   return { ok: true };
 }

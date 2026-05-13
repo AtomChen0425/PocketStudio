@@ -136,7 +136,8 @@ function TasksPageInner() {
 
       try {
         for (const task of newlyInProgress) {
-          const msg = `@${task.assignee} ${task.title}${task.description ? "\n\n" + task.description : ""}\n\n[task:${task.id}]`;
+          const target = task.assigneeType === "team" ? `team:${task.assignee}` : task.assignee;
+          const msg = `@${target} ${task.title}${task.description ? "\n\n" + task.description : ""}\n\n[task:${task.id}]`;
           await sendMessage({ message: msg, sender: "Web", channel: "web", projectId: task.projectId });
         }
         await reorderTasks(colMap);
@@ -165,9 +166,10 @@ function TasksPageInner() {
     async (task: Task) => {
       if (!task.assignee) return;
       const { sendMessage: send, updateTask } = await import("@/lib/api");
-      const msg = `@${task.assignee} ${task.title}${task.description ? "\n\n" + task.description : ""}\n\n[task:${task.id}]`;
+      const target = task.assigneeType === "team" ? `team:${task.assignee}` : task.assignee;
+      const msg = `@${target} ${task.title}${task.description ? "\n\n" + task.description : ""}\n\n[task:${task.id}]`;
       try {
-        await send({ message: msg, sender: "Web", channel: "web" });
+        await send({ message: msg, sender: "Web", channel: "web", projectId: task.projectId });
         await updateTask(task.id, { status: "in_progress" });
         refresh();
       } catch {

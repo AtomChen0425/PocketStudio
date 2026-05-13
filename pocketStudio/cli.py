@@ -9,6 +9,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import webbrowser
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -141,6 +143,11 @@ class DaemonManager:
         started = self.start()
         return {"ok": True, "stopped": stopped, "started": started}
 
+    def open(self) -> dict[str, Any]:
+        url = self.api_url
+        opened = webbrowser.open(url)
+        return {"ok": True, "opened": opened, "url": url}
+
     def _read_pid(self) -> int | None:
         if not self.pid_file.exists():
             return None
@@ -187,16 +194,24 @@ def print_json(value: Any) -> int:
     return 0
 
 
+def package_version() -> str:
+    try:
+        return version("pocketstudio")
+    except PackageNotFoundError:
+        return "0.0.0+editable"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pocketstudio", description="pocketStudio command line control plane")
     parser.add_argument("--api-url", default=None, help="API base URL, defaults to POCKETSTUDIO_API_URL or http://127.0.0.1:3777")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Show system status")
+    sub.add_parser("version", help="Show pocketStudio version")
 
     daemon = sub.add_parser("daemon", help="Local API daemon process operations")
     daemon_sub = daemon.add_subparsers(dest="daemon_command", required=True)
-    for name in ("start", "stop", "restart", "status"):
+    for name in ("start", "stop", "restart", "status", "open"):
         daemon_cmd = daemon_sub.add_parser(name)
         daemon_cmd.add_argument("--host", default=DEFAULT_HOST)
         daemon_cmd.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -260,6 +275,12 @@ def build_parser() -> argparse.ArgumentParser:
     heartbeat_tick.add_argument("--force", action="store_true")
     heartbeat_clear = heartbeat_sub.add_parser("clear")
     heartbeat_clear.add_argument("--agent")
+
+    channel = sub.add_parser("channel", help="Messaging channel operations")
+    channel_sub = channel.add_subparsers(dest="channel_command", required=True)
+    for name in ("status", "start", "stop", "restart", "tick"):
+        channel_cmd = channel_sub.add_parser(name)
+        channel_cmd.add_argument("channel")
 
     agent = sub.add_parser("agent", help="Agent operations")
     agent_sub = agent.add_subparsers(dest="agent_command", required=True)
@@ -410,6 +431,8 @@ def build_parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace, client: ApiClient) -> int:
     if args.command == "status":
         return print_json(client.get("/api/status"))
+    if args.command == "version":
+        return print_json({"ok": True, "name": "pocketstudio", "version": package_version()})
     if args.command == "daemon":
         return run_daemon(args)
     if args.command == "logs":
@@ -461,6 +484,8 @@ def run(args: argparse.Namespace, client: ApiClient) -> int:
         if args.heartbeat_command == "clear":
             suffix = f"?agent={quote(args.agent)}" if args.agent else ""
             return print_json(client.delete(f"/api/heartbeat/state{suffix}"))
+    if args.command == "channel":
+        return print_json(client.post(f"/api/services/channel/{quote(args.channel)}/{args.channel_command}", {}))
     if args.command == "agent":
         return run_agent(args, client)
     if args.command == "team":
@@ -537,6 +562,8 @@ def run_daemon(args: argparse.Namespace, manager: DaemonManager | None = None) -
         return print_json(daemon.stop())
     if args.daemon_command == "restart":
         return print_json(daemon.restart())
+    if args.daemon_command == "open":
+        return print_json(daemon.open())
     raise SystemExit(f"Unknown daemon command: {args.daemon_command}")
 
 

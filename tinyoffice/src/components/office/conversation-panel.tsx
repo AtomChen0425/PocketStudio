@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/prompt-input";
 import { Markdown } from "@/components/ui/markdown";
 import { PIXEL_SCENE_LAYOUT } from "./pixel-office-scene";
-import { sendMessage, type AgentConfig, type AgentMessage } from "@/lib/api";
+import { sendMessage, type AgentConfig, type AgentMessage, type TeamConfig } from "@/lib/api";
 import { timeAgo } from "@/lib/hooks";
 import type { ConversationEntry, LiveBubble } from "./types";
 
@@ -31,6 +31,7 @@ function agentColor(agentId: string): string {
 
 type ConversationPanelProps = {
   agents: Record<string, AgentConfig> | null;
+  teams: Record<string, TeamConfig> | null;
   agentEntries: [string, AgentConfig][];
   agentHistories: Record<string, AgentMessage[]> | null;
   bubbles: LiveBubble[];
@@ -39,6 +40,7 @@ type ConversationPanelProps = {
 
 export function ConversationPanel({
   agents,
+  teams,
   agentEntries,
   agentHistories,
   bubbles,
@@ -67,10 +69,13 @@ export function ConversationPanel({
     if (!chatInput.trim() || sending) return;
     setSending(true);
     try {
-      const message =
-        conversationFilter !== "all" && !chatInput.trim().startsWith("@")
-          ? `@${conversationFilter} ${chatInput.trim()}`
-          : chatInput.trim();
+      const target =
+        conversationFilter.startsWith("team:")
+          ? `@${conversationFilter}`
+          : conversationFilter !== "all"
+            ? `@${conversationFilter}`
+            : "";
+      const message = target && !chatInput.trim().startsWith("@") ? `${target} ${chatInput.trim()}` : chatInput.trim();
 
       await sendMessage({ message, sender: "Web", channel: "web" });
       setChatInput("");
@@ -155,13 +160,24 @@ export function ConversationPanel({
 
   const visibleConversation = useMemo(() => {
     if (conversationFilter === "all") return conversationEntries.slice(-60);
+    if (conversationFilter.startsWith("team:")) {
+      const teamId = conversationFilter.slice("team:".length);
+      const memberIds = teams?.[teamId]?.agents ?? [];
+      return conversationEntries
+        .filter((entry) => {
+          if (entry.targetAgents.includes(teamId)) return true;
+          if (entry.agentId && memberIds.includes(entry.agentId)) return true;
+          return entry.targetAgents.some((target) => memberIds.includes(target));
+        })
+        .slice(-60);
+    }
     return conversationEntries
       .filter((entry) => {
         if (entry.role === "agent") return entry.agentId === conversationFilter;
         return entry.targetAgents.length === 0 || entry.targetAgents.includes(conversationFilter);
       })
       .slice(-60);
-  }, [conversationEntries, conversationFilter]);
+  }, [conversationEntries, conversationFilter, teams]);
 
   useEffect(() => {
     const node = conversationScrollRef.current;
@@ -209,6 +225,18 @@ export function ConversationPanel({
               }`}
             >
               {agent.name || `@${agentId}`}
+            </button>
+          ))}
+          {Object.entries(teams ?? {}).map(([teamId, team]) => (
+            <button
+              key={`team:${teamId}`}
+              type="button"
+              onClick={() => setConversationFilterAndStick(`team:${teamId}`)}
+              className={`border px-3 py-1.5 font-mono text-[10px] transition ${
+                conversationFilter === `team:${teamId}` ? activeButtonClass : inactiveButtonClass
+              }`}
+            >
+              {team.name || `@team:${teamId}`}
             </button>
           ))}
         </div>
@@ -264,7 +292,13 @@ export function ConversationPanel({
           className="relative w-full rounded-none border-[#885c47] bg-[#f4e7d6] shadow-none"
         >
           <PromptInputTextarea
-            placeholder={conversationFilter === "all" ? "Message @agent or @team..." : `Message @${conversationFilter}...`}
+            placeholder={
+              conversationFilter === "all"
+                ? "Message @agent or @team..."
+                : conversationFilter.startsWith("team:")
+                  ? `Message @${conversationFilter}...`
+                  : `Message @${conversationFilter}...`
+            }
             className="min-h-[70px] text-[#241b16] placeholder:text-[#6f5c4b]"
           />
           <PromptInputActions className="absolute bottom-2 right-2">

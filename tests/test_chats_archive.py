@@ -11,7 +11,13 @@ def test_chat_archives_list_and_read_team_history() -> None:
     with TestClient(app) as client:
         posted = client.post(f"/api/chatroom/{team_id}", json={"sender": "tester", "message": "hello archive"})
         assert posted.status_code == 200
+        assert posted.json()["sender"] == "tester"
+        assert posted.json()["from_agent"] == "tester"
         client.post(f"/api/chatroom/{team_id}", json={"sender": "agent", "message": "second archived note"})
+
+        chatroom = client.get(f"/api/chatroom/{team_id}")
+        assert chatroom.status_code == 200
+        assert any(message["from_agent"] == "tester" for message in chatroom.json())
 
         archives = client.get("/api/chats")
         assert archives.status_code == 200
@@ -70,6 +76,8 @@ def test_chatroom_post_enqueues_internal_member_messages_once() -> None:
 
         posted = client.post(f"/api/chatroom/{team_id}", json={"message": "hello team"})
         assert posted.status_code == 200
+        assert posted.json()["sender"] == "user"
+        assert posted.json()["from_agent"] == "user"
 
         messages = client.get("/api/queue").json()
         chatroom_messages = [

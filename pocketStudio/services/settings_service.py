@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -35,6 +36,7 @@ class SettingsService:
 
     def update(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.validate(payload)
+        payload = self._normalize_paths(payload)
         current = self.snapshot()
         next_settings = self._merge(current, payload)
         self.write(next_settings)
@@ -42,6 +44,7 @@ class SettingsService:
 
     def preview_update(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.validate(payload)
+        payload = self._normalize_paths(payload)
         current = self.snapshot()
         next_settings = self._merge(current, payload)
         return {
@@ -142,8 +145,11 @@ class SettingsService:
 
     def _legacy_db_settings(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
+        allowed_keys = {"workspace", "channels", "models", "monitoring", "agents", "teams"}
         rows = self.db.fetch_all("SELECT key, value FROM app_settings")
         for row in rows:
+            if row["key"] not in allowed_keys:
+                continue
             try:
                 value = json.loads(row["value"])
             except json.JSONDecodeError:
@@ -177,6 +183,7 @@ class SettingsService:
             restored = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise SettingsValidationError(f"settings backup is not valid JSON: {exc.msg}") from exc
+        restored = self._known_sections(restored)
         self.validate(restored)
         self.write(restored)
         return self.snapshot()
@@ -199,6 +206,41 @@ class SettingsService:
                 merged[key] = cls._merge(merged.get(key), value)
             return merged
         return update
+
+    @classmethod
+    def _normalize_paths(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = json.loads(json.dumps(payload))
+        workspace = normalized.get("workspace")
+        if isinstance(workspace, dict) and isinstance(workspace.get("path"), str):
+            workspace["path"] = cls._expand_home_path(workspace["path"])
+        agents = normalized.get("agents")
+        if isinstance(agents, dict):
+            for config in agents.values():
+                if isinstance(config, dict):
+                    working_directory = config.get("working_directory") or config.get("workspace")
+                    if isinstance(working_directory, str):
+                        expanded = cls._expand_home_path(working_directory)
+                        if "working_directory" in config:
+                            config["working_directory"] = expanded
+                        if "workspace" in config:
+                            config["workspace"] = expanded
+        return normalized
+
+    @staticmethod
+    def _expand_home_path(value: str) -> str:
+        home = os.environ.get("HOME") or str(Path.home())
+        if value == "~" or value == "$HOME":
+            return home
+        if value.startswith("~/"):
+            return str(Path(home) / value[2:])
+        if value.startswith("$HOME/"):
+            return str(Path(home) / value[6:])
+        return value
+
+    @staticmethod
+    def _known_sections(settings: dict[str, Any]) -> dict[str, Any]:
+        allowed = {"workspace", "channels", "models", "monitoring", "agents", "teams"}
+        return {key: value for key, value in settings.items() if key in allowed}
 
     @classmethod
     def _diff(cls, current: Any, next_value: Any, prefix: str = "") -> list[dict[str, Any]]:

@@ -60,7 +60,8 @@ export type BackendTask = {
 export type BackendChatMessage = {
   id: number;
   team_id: string;
-  sender: string;
+  from_agent?: string;
+  sender?: string;
   message: string;
   created_at: string;
 };
@@ -129,7 +130,7 @@ export function normalizeChatMessage(message: BackendChatMessage): ChatMessage {
   return {
     id: message.id,
     team_id: message.team_id,
-    from_agent: message.sender,
+    from_agent: message.from_agent || message.sender || "unknown",
     message: message.message,
     created_at: toTimestamp(message.created_at),
   };

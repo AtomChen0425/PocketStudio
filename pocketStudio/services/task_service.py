@@ -138,6 +138,7 @@ class TaskService:
         return updated
 
     def delete(self, task_id: int) -> None:
+        self.get(task_id)
         self.db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         self.events.emit("task.deleted", {"task_id": task_id})
 

@@ -101,7 +101,8 @@ export function TaskDetailPanel({
       await handleUpdate({ status: status as Task["status"] });
       // If moved to in_progress and has assignee, notify agent
       if (status === "in_progress" && prev !== "in_progress" && task?.assignee) {
-        const msg = `@${task.assignee} ${task.title}${task.description ? "\n\n" + task.description : ""}\n\n[task:${task.id}]`;
+        const target = task.assigneeType === "team" ? `team:${task.assignee}` : task.assignee;
+        const msg = `@${target} ${task.title}${task.description ? "\n\n" + task.description : ""}\n\n[task:${task.id}]`;
         await sendMessage({ message: msg, sender: "Web", channel: "web", projectId: task.projectId }).catch(() => {});
       }
     },

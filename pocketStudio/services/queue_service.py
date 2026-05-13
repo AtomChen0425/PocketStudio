@@ -69,6 +69,14 @@ class QueueService:
             )
         return [self._to_message(row) for row in rows]
 
+    def find_by_client_message_id(self, client_message_id: str, limit: int = 1000) -> QueueMessage | None:
+        rows = self.db.fetch_all("SELECT * FROM messages ORDER BY id DESC LIMIT ?", (limit,))
+        for row in rows:
+            metadata = json.loads(row["metadata"] or "{}")
+            if metadata.get("clientMessageId") == client_message_id or metadata.get("messageId") == client_message_id:
+                return self._to_message(row)
+        return None
+
     def grouped_chatroom_messages(
         self,
         limit: int = 100,
@@ -197,12 +205,13 @@ class QueueService:
                 entry["processing"] += count
         return list(grouped.values())
 
-    def next_queued(self) -> QueueMessage | None:
+    def next_queued(self, newest: bool = False) -> QueueMessage | None:
+        order = "id DESC" if newest else "id ASC"
         row = self.db.fetch_one(
-            """
+            f"""
             SELECT * FROM messages
             WHERE status IN ('queued', 'failed') AND attempts < ?
-            ORDER BY id ASC
+            ORDER BY {order}
             LIMIT 1
             """,
             (self.settings.queue_max_attempts,),
@@ -363,6 +372,18 @@ class QueueService:
         )
         return [self._to_agent_message(row) for row in reversed(rows)]
 
+    def get_all_agent_messages(self, limit: int = 100, since_id: int = 0) -> list[AgentMessage]:
+        rows = self.db.fetch_all(
+            """
+            SELECT * FROM agent_messages
+            WHERE id > ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (since_id, limit),
+        )
+        return [self._to_agent_message(row) for row in reversed(rows)]
+
     def reset_agent(self, agent_id: str) -> dict:
         message_rows = self.db.fetch_all("SELECT id FROM agent_messages WHERE agent_id = ?", (agent_id,))
         response_rows = self.db.fetch_all("SELECT id FROM responses WHERE agent = ?", (agent_id,))
@@ -476,12 +497,14 @@ class QueueService:
         except Exception:
             runs = [{"agent_id": "orchestrator", "output": message.result}]
         responses = []
+        channel = message.metadata.get("channel", "web")
+        sender_id = message.metadata.get("senderId") or message.metadata.get("sender_id")
         for index, run in enumerate(runs):
             response_text, team_metadata = self._prepare_team_response_text(run)
             prepared = self.responses.prepare(
                 response_text,
                 context={
-                    "channel": "web",
+                    "channel": channel,
                     "sender": message.sender,
                     "messageId": f"{message.id}-{index}",
                     "originalMessage": message.content,
@@ -492,8 +515,9 @@ class QueueService:
             responses.append(
                 self.enqueue_response(
                     message_id=f"{message.id}-{index}",
-                    channel="web",
+                    channel=channel,
                     sender=message.sender,
+                    sender_id=sender_id,
                     message=prepared.message,
                     original_message=message.content,
                     agent=run.get("agent_id"),

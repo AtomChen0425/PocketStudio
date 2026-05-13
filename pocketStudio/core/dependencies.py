@@ -17,6 +17,7 @@ from pocketStudio.services.schedule_service import ScheduleService
 from pocketStudio.services.settings_service import SettingsService
 from pocketStudio.services.task_service import TaskService
 from pocketStudio.services.team_service import TeamService
+from pocketStudio.channels.telegram import TelegramChannelService
 from pocketStudio.services.worker_service import WorkerService
 
 
@@ -68,6 +69,18 @@ def get_chat_service() -> ChatService:
 @lru_cache
 def get_channel_service() -> ChannelService:
     return ChannelService(get_database(), get_agent_service(), get_team_service())
+
+
+@lru_cache
+def get_telegram_channel_service() -> TelegramChannelService:
+    return TelegramChannelService(
+        get_database(),
+        get_settings(),
+        get_settings_service(),
+        get_channel_service(),
+        get_queue_service(),
+        get_event_service(),
+    )
 
 
 @lru_cache

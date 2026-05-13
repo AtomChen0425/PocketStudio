@@ -56,6 +56,17 @@ def test_dead_letter_retry_delete_and_agent_status() -> None:
         assert delete_response.json()["ok"] is True
 
 
+def test_dead_letter_retry_delete_return_404_for_missing_message() -> None:
+    with TestClient(app) as client:
+        retry_response = client.post("/api/queue/dead/99999999/retry")
+        delete_response = client.delete("/api/queue/dead/99999999")
+
+        assert retry_response.status_code == 404
+        assert "dead message" in retry_response.json()["detail"]
+        assert delete_response.status_code == 404
+        assert "dead message" in delete_response.json()["detail"]
+
+
 def test_recover_stale_running_message() -> None:
     settings = Settings(pocketStudio_home=Path(".pytest-local") / f"stale-home-{uuid.uuid4().hex[:8]}")
     db = Database(settings.database_path)

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from pocketStudio.api.errors import not_found
@@ -23,6 +24,7 @@ from pocketStudio.core.dependencies import (
     get_settings_service,
     get_task_service,
     get_team_service,
+    get_telegram_channel_service,
     get_worker_service,
     get_provider_registry,
 )
@@ -49,6 +51,7 @@ from pocketStudio.services.schedule_service import ScheduleService
 from pocketStudio.services.settings_service import SettingsService, SettingsValidationError
 from pocketStudio.services.task_service import TaskService
 from pocketStudio.services.team_service import TeamService
+from pocketStudio.channels.telegram import TELEGRAM_CHANNEL_ID, TelegramChannelService
 from pocketStudio.services.worker_service import WorkerService
 from pocketStudio.providers.registry import ProviderRegistry
 
@@ -215,7 +218,7 @@ def _settings_apply_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 system_prompt=config.get("system_prompt") or "",
                 provider=config.get("provider") or "local",
                 model=config.get("model") or None,
-                workspace=config.get("working_directory") or config.get("workspace") or None,
+                workspace=_settings_path_value(config.get("working_directory") or config.get("workspace")),
                 enabled=config.get("enabled", True),
                 heartbeat_enabled=(config.get("heartbeat") or {}).get("enabled", True),
                 heartbeat_interval=(config.get("heartbeat") or {}).get("interval"),
@@ -239,6 +242,12 @@ def _settings_apply_plan(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     return {"customProviders": custom_providers, "agents": agent_models, "teams": team_models}
+
+
+def _settings_path_value(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return SettingsService._expand_home_path(value)
 
 
 def _validate_settings_apply_plan(payload: dict[str, Any]) -> dict[str, Any]:
@@ -392,11 +401,18 @@ def enqueue_legacy_message(
     payload: dict[str, Any],
     orchestrator: Orchestrator = Depends(get_orchestrator),
     channels: ChannelService = Depends(get_channel_service),
+    queue: QueueService = Depends(get_queue_service),
 ) -> dict:
     text = payload.get("message") or ""
     channel = payload.get("channel") or "web"
     sender = payload.get("sender") or "api"
     sender_id = payload.get("senderId") or payload.get("sender_id") or sender
+    client_message_id = payload.get("messageId") or payload.get("message_id")
+    if client_message_id and queue.find_by_client_message_id(str(client_message_id)):
+        return JSONResponse(
+            status_code=409,
+            content={"error": "duplicate messageId", "messageId": str(client_message_id)},
+        )
     if channel != "web" and sender_id:
         pairing = channels.ensure_sender_paired(channel, sender_id, sender)
         if not pairing.approved:
@@ -415,10 +431,15 @@ def enqueue_legacy_message(
     project_id = payload.get("projectId") or payload.get("project_id")
     if project_id:
         metadata["projectId"] = project_id
+    if client_message_id:
+        metadata["clientMessageId"] = str(client_message_id)
+        metadata["messageId"] = str(client_message_id)
     message = orchestrator.enqueue(
         MessageCreate(target=routed.target, content=routed.content or text, sender=sender, metadata=metadata)
     )
-    response = {"ok": True, "messageId": str(message.id)}
+    response = {"ok": True, "messageId": str(message.id), "queueId": message.id}
+    if client_message_id:
+        response["clientMessageId"] = str(client_message_id)
     if routed.switch_notification:
         response["switchNotification"] = routed.switch_notification
     return response
@@ -452,12 +473,16 @@ def queue_dead(
 
 @router.post("/queue/dead/{message_id}/retry")
 def queue_dead_retry(message_id: int, queue: QueueService = Depends(get_queue_service)) -> dict:
-    return {"ok": queue.retry_dead(message_id)}
+    if not queue.retry_dead(message_id):
+        raise HTTPException(status_code=404, detail=f"dead message '{message_id}' not found")
+    return {"ok": True}
 
 
 @router.delete("/queue/dead/{message_id}")
 def queue_dead_delete(message_id: int, queue: QueueService = Depends(get_queue_service)) -> dict:
-    return {"ok": queue.delete_dead(message_id)}
+    if not queue.delete_dead(message_id):
+        raise HTTPException(status_code=404, detail=f"dead message '{message_id}' not found")
+    return {"ok": True}
 
 
 @router.post("/queue/recover-stale")
@@ -555,7 +580,9 @@ def responses_for_channel(channel: str, queue: QueueService = Depends(get_queue_
 
 @router.post("/responses/{response_id}/ack")
 def ack_response(response_id: int, queue: QueueService = Depends(get_queue_service)) -> dict:
-    return {"ok": queue.ack_response(response_id)}
+    if not queue.ack_response(response_id):
+        raise HTTPException(status_code=404, detail=f"response '{response_id}' not found")
+    return {"ok": True}
 
 
 @router.post("/responses/prune")
@@ -613,6 +640,15 @@ def agent_messages(
     queue: QueueService = Depends(get_queue_service),
 ) -> list[dict]:
     return [message.model_dump() for message in queue.get_agent_messages(agent_id, limit, since_id)]
+
+
+@router.get("/agent-messages")
+def all_agent_messages(
+    limit: int = Query(default=100, ge=1, le=500),
+    since_id: int = Query(default=0, ge=0),
+    queue: QueueService = Depends(get_queue_service),
+) -> list[dict]:
+    return [message.model_dump() for message in queue.get_all_agent_messages(limit, since_id)]
 
 
 @router.post("/agents/{agent_id}/reset")
@@ -839,7 +875,10 @@ def repair_project_workspace(project_id: str, projects: ProjectService = Depends
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str, projects: ProjectService = Depends(get_project_service)) -> dict:
-    projects.delete_project(project_id)
+    try:
+        projects.delete_project(project_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
     return {"ok": True}
 
 
@@ -889,7 +928,10 @@ def create_task_comment(
 
 @router.delete("/comments/{comment_id}")
 def delete_comment(comment_id: str, projects: ProjectService = Depends(get_project_service)) -> dict:
-    projects.delete_comment(comment_id)
+    try:
+        projects.delete_comment(comment_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
     return {"ok": True}
 
 
@@ -953,7 +995,10 @@ def fire_schedule(
 
 @router.delete("/schedules/{schedule_id}")
 def delete_schedule(schedule_id: str, schedules: ScheduleService = Depends(get_schedule_service)) -> dict:
-    schedules.delete(schedule_id)
+    try:
+        schedules.delete(schedule_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
     return {"ok": True}
 
 
@@ -962,18 +1007,44 @@ def system_status(
     worker: WorkerService = Depends(get_worker_service),
     heartbeat: HeartbeatService = Depends(get_heartbeat_service),
     settings_service: SettingsService = Depends(get_settings_service),
+    telegram: TelegramChannelService = Depends(get_telegram_channel_service),
+) -> dict:
+    return _service_status_payload(worker, heartbeat, settings_service, telegram)
+
+
+def _service_status_payload(
+    worker: WorkerService,
+    heartbeat: HeartbeatService,
+    settings_service: SettingsService,
+    telegram: TelegramChannelService | None = None,
 ) -> dict:
     enabled_channels = (settings_service.snapshot().get("channels") or {}).get("enabled") or ["web"]
+    worker_snapshot = worker.snapshot()
+    channels = {
+        channel: {
+            "running": channel == "web",
+            "managed": channel == "web",
+            "implemented": channel == "web",
+            "status": "running" if channel == "web" else "unimplemented",
+        }
+        for channel in enabled_channels
+    }
+    if TELEGRAM_CHANNEL_ID in enabled_channels and telegram is not None:
+        channels[TELEGRAM_CHANNEL_ID] = telegram.status()
+    services = {
+        "server": {"running": True, "status": "running", "port": 3777},
+        "worker": {"running": worker_snapshot["running"], "status": worker_snapshot["health"]},
+        "heartbeat": {"running": worker_snapshot["running"], "status": "running" if worker_snapshot["running"] else "stopped"},
+        "channels": channels,
+    }
     return {
         "ok": True,
         "uptime": uptime_seconds(),
-        "server": {"running": True, "port": 3777},
-        "channels": {
-            channel: {"running": channel == "web", "managed": channel == "web"}
-            for channel in enabled_channels
-        },
+        "server": services["server"],
+        "channels": channels,
         "heartbeat": heartbeat.snapshot(),
-        "worker": worker.snapshot(),
+        "worker": worker_snapshot,
+        "services": services,
     }
 
 
@@ -1062,6 +1133,7 @@ def worker_maintenance(
 async def apply_services(
     worker: WorkerService = Depends(get_worker_service),
     settings_service: SettingsService = Depends(get_settings_service),
+    telegram: TelegramChannelService = Depends(get_telegram_channel_service),
 ) -> dict:
     worker.start()
     enabled_channels = (settings_service.snapshot().get("channels") or {}).get("enabled") or ["web"]
@@ -1070,9 +1142,55 @@ async def apply_services(
     for channel in enabled_channels:
         if channel == "web":
             started.append("web")
+        elif channel == TELEGRAM_CHANNEL_ID:
+            if telegram.start():
+                started.append(TELEGRAM_CHANNEL_ID)
+            elif telegram.configured_token():
+                started.append(TELEGRAM_CHANNEL_ID)
+            else:
+                errors.append("telegram: TELEGRAM_BOT_TOKEN or channels.telegram.bot_token is required")
         else:
             errors.append(f"{channel}: channel process manager is not implemented")
     return {"ok": True, "started": started, "heartbeat": True, "errors": errors or None}
+
+
+@router.get("/services/status")
+def services_status(
+    worker: WorkerService = Depends(get_worker_service),
+    heartbeat: HeartbeatService = Depends(get_heartbeat_service),
+    settings_service: SettingsService = Depends(get_settings_service),
+    telegram: TelegramChannelService = Depends(get_telegram_channel_service),
+) -> dict:
+    return _service_status_payload(worker, heartbeat, settings_service, telegram)
+
+
+@router.post("/services/start")
+async def start_services(
+    worker: WorkerService = Depends(get_worker_service),
+    heartbeat: HeartbeatService = Depends(get_heartbeat_service),
+    settings_service: SettingsService = Depends(get_settings_service),
+    telegram: TelegramChannelService = Depends(get_telegram_channel_service),
+) -> dict:
+    started = worker.start()
+    if TELEGRAM_CHANNEL_ID in ((settings_service.snapshot().get("channels") or {}).get("enabled") or []):
+        telegram.start()
+    return {"ok": True, "started": {"worker": started}, **_service_status_payload(worker, heartbeat, settings_service, telegram)}
+
+
+@router.post("/services/stop")
+async def stop_services(
+    worker: WorkerService = Depends(get_worker_service),
+    heartbeat: HeartbeatService = Depends(get_heartbeat_service),
+    settings_service: SettingsService = Depends(get_settings_service),
+    telegram: TelegramChannelService = Depends(get_telegram_channel_service),
+) -> dict:
+    stopped = await worker.stop()
+    telegram_stopped = await telegram.stop()
+    return {
+        "ok": True,
+        "stopped": {"worker": stopped, TELEGRAM_CHANNEL_ID: telegram_stopped},
+        **_service_status_payload(worker, heartbeat, settings_service, telegram),
+    }
 
 
 @router.post("/services/restart")
@@ -1082,11 +1200,26 @@ async def restart_service(worker: WorkerService = Depends(get_worker_service)) -
 
 
 @router.post("/services/channel/{channel_id}/{action}")
-def channel_action(channel_id: str, action: str) -> dict:
+async def channel_action(
+    channel_id: str,
+    action: str,
+    telegram: TelegramChannelService = Depends(get_telegram_channel_service),
+) -> dict:
     if channel_id == "web" and action in {"start", "restart"}:
         return {"ok": True, "channel": channel_id, "action": "started"}
     if channel_id == "web" and action == "stop":
         return {"ok": False, "channel": channel_id, "error": "web channel is built into the API server"}
+    if channel_id == TELEGRAM_CHANNEL_ID:
+        if action == "status":
+            return {"ok": True, "channel": channel_id, "telegram": telegram.status()}
+        if action == "start":
+            return {"ok": True, "channel": channel_id, "started": telegram.start(), "telegram": telegram.status()}
+        if action == "stop":
+            return {"ok": True, "channel": channel_id, "stopped": await telegram.stop(), "telegram": telegram.status()}
+        if action == "restart":
+            return {"ok": True, "channel": channel_id, "started": await telegram.restart(), "telegram": telegram.status()}
+        if action == "tick":
+            return await telegram.tick()
     return {"ok": False, "channel": channel_id, "error": "channel process manager is not implemented"}
 
 

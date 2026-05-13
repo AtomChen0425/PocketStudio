@@ -276,6 +276,10 @@ class FakeDaemon:
         self.calls.append("restart")
         return {"ok": True}
 
+    def open(self):
+        self.calls.append("open")
+        return {"opened": True}
+
 
 def test_cli_daemon_commands_dispatch_to_manager() -> None:
     manager = FakeDaemon()
@@ -284,8 +288,20 @@ def test_cli_daemon_commands_dispatch_to_manager() -> None:
     cli.run_daemon(argparse.Namespace(daemon_command="start", host="127.0.0.1", port=3777), manager=manager)
     cli.run_daemon(argparse.Namespace(daemon_command="stop", host="127.0.0.1", port=3777), manager=manager)
     cli.run_daemon(argparse.Namespace(daemon_command="restart", host="127.0.0.1", port=3777), manager=manager)
+    cli.run_daemon(argparse.Namespace(daemon_command="open", host="127.0.0.1", port=3777), manager=manager)
 
-    assert manager.calls == ["status", "start", "stop", "restart"]
+    assert manager.calls == ["status", "start", "stop", "restart", "open"]
+
+
+def test_cli_version_does_not_call_api(capsys) -> None:
+    client = FakeClient()
+
+    assert cli.main(["version"], client=client) == 0
+
+    assert client.calls == []
+    output = capsys.readouterr().out
+    assert '"name": "pocketstudio"' in output
+    assert '"version":' in output
 
 
 def test_cli_worker_maintenance_maps_to_worker_endpoint() -> None:
@@ -318,4 +334,16 @@ def test_cli_worker_pause_and_resume_map_to_worker_endpoints() -> None:
     assert client.calls == [
         ("POST", "/api/worker/pause", {}),
         ("POST", "/api/worker/resume", {}),
+    ]
+
+
+def test_cli_channel_commands_map_to_service_channel_endpoints() -> None:
+    client = FakeClient()
+
+    cli.main(["channel", "status", "telegram"], client=client)
+    cli.main(["channel", "tick", "telegram"], client=client)
+
+    assert client.calls == [
+        ("POST", "/api/services/channel/telegram/status", {}),
+        ("POST", "/api/services/channel/telegram/tick", {}),
     ]

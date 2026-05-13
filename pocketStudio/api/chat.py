@@ -9,7 +9,13 @@ from pocketStudio.services.team_service import TeamService
 router = APIRouter(prefix="/chatroom", tags=["chatroom"])
 
 
-@router.get("/{team_id}", response_model=list[ChatMessage])
+def _chatroom_payload(message: ChatMessage) -> dict:
+    payload = message.model_dump()
+    payload["from_agent"] = message.sender
+    return payload
+
+
+@router.get("/{team_id}")
 def list_chat(
     team_id: str,
     limit: int = Query(default=100, ge=1, le=500),
@@ -17,27 +23,30 @@ def list_chat(
     sender: str | None = None,
     q: str | None = None,
     service: ChatService = Depends(get_chat_service),
-) -> list[ChatMessage]:
-    return service.list(team_id=team_id, limit=limit, since=since, sender=sender, query=q)
+) -> list[dict]:
+    return [
+        _chatroom_payload(message)
+        for message in service.list(team_id=team_id, limit=limit, since=since, sender=sender, query=q)
+    ]
 
 
-@router.post("/{team_id}", response_model=ChatMessage)
+@router.post("/{team_id}")
 def post_chat(
     team_id: str,
     payload: ChatMessageCreate,
     service: ChatService = Depends(get_chat_service),
     queue: QueueService = Depends(get_queue_service),
     teams: TeamService = Depends(get_team_service),
-) -> ChatMessage:
+) -> dict:
     sender = "user" if payload.sender == "api" else payload.sender
     chat_payload = ChatMessageCreate(sender=sender, message=payload.message)
     message = service.post(team_id, chat_payload)
     if sender != "user":
-        return message
+        return _chatroom_payload(message)
     try:
         team = teams.get(team_id)
     except KeyError:
-        return message
+        return _chatroom_payload(message)
     chat_content = f"[Chat room #{team_id} - @user]:\n{payload.message}"
     for agent_id in team.agent_ids:
         queue.enqueue(
@@ -55,4 +64,4 @@ def post_chat(
                 },
             )
         )
-    return message
+    return _chatroom_payload(message)

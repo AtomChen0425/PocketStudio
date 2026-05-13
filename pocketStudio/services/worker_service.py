@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 
 from pocketStudio.core.config import Settings
+from pocketStudio.models import QueueMessage
 from pocketStudio.services.event_service import EventService
 from pocketStudio.services.heartbeat_service import HeartbeatService
 from pocketStudio.services.orchestrator import Orchestrator
@@ -95,17 +96,19 @@ class WorkerService:
                 return False
             try:
                 self.orchestrator.queue.recover_stale_messages()
-                self.schedules.fire_due(self.orchestrator.queue)
-                self.heartbeat.fire_due(self.orchestrator.queue)
-                result = await self.orchestrator.process_one()
+                fired_messages = [
+                    *self.schedules.fire_due(self.orchestrator.queue),
+                    *self.heartbeat.fire_due(self.orchestrator.queue),
+                ]
+                processed = await self._process_fired_messages(fired_messages)
+                if processed == 0 or force:
+                    processed += await self._process_next_available(newest=force)
             except Exception as exc:
-                self.state.failures += 1
-                self.state.last_error = str(exc)
-                self.events.emit("worker.error", {"error": str(exc)})
+                self._record_failure(exc)
                 return False
-            if result is None:
+            if processed == 0:
                 return False
-            self.state.processed += 1
+            self.state.processed += processed
             self.state.last_processed_at = time.time()
             self.state.last_error = None
             return True
@@ -160,6 +163,34 @@ class WorkerService:
         if queue_status.get("incoming", 0) > 0:
             return "busy"
         return "idle"
+
+    async def _process_fired_messages(self, messages: list[QueueMessage]) -> int:
+        processed = 0
+        for message in messages:
+            try:
+                await self.orchestrator.process_message(message.id)
+                processed += 1
+            except Exception as exc:
+                self._record_failure(exc)
+        return processed
+
+    async def _process_next_available(self, newest: bool = False) -> int:
+        max_attempts = max(self.orchestrator.queue.status().incoming * self.settings.queue_max_attempts, 1)
+        for _ in range(max_attempts):
+            if self.orchestrator.queue.next_queued(newest=newest) is None:
+                return 0
+            try:
+                result = await self.orchestrator.process_one(newest=newest)
+            except Exception as exc:
+                self._record_failure(exc)
+                continue
+            return 1 if result is not None else 0
+        return 0
+
+    def _record_failure(self, exc: Exception) -> None:
+        self.state.failures += 1
+        self.state.last_error = str(exc)
+        self.events.emit("worker.error", {"error": str(exc)})
 
     async def _run(self) -> None:
         while not self._stop.is_set():

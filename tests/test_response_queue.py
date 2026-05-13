@@ -42,6 +42,14 @@ def test_response_queue_channel_ack_and_prune() -> None:
         assert prune_response.json()["pruned"] >= 1
 
 
+def test_response_ack_returns_404_for_missing_response() -> None:
+    with TestClient(app) as client:
+        response = client.post("/api/responses/99999999/ack")
+
+        assert response.status_code == 404
+        assert "response" in response.json()["detail"]
+
+
 def test_prune_completed_messages() -> None:
     agent_id = f"prune-agent-{uuid.uuid4().hex[:8]}"
 

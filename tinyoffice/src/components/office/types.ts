@@ -96,11 +96,13 @@ export function trimText(text: string, maxLength: number) {
 
 export function extractTargets(message: string) {
   const targets: string[] = [];
+  const directTeam = message.match(/^@team:(\w[\w-]*)/);
+  if (directTeam) targets.push(directTeam[1]);
   for (const match of message.matchAll(/\[@(\w[\w-]*?):/g)) {
     if (!targets.includes(match[1])) targets.push(match[1]);
   }
   if (targets.length === 0) {
-    const direct = message.match(/^@(\w[\w-]*)/);
+    const direct = message.match(/^@(?!team:)(\w[\w-]*)/);
     if (direct) targets.push(direct[1]);
   }
   return targets;
