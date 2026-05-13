@@ -4,6 +4,7 @@ import json
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
+from pocketStudio.core.json_store import read_json_object, write_json_object
 from pocketStudio.models import Team, TeamCreate
 
 
@@ -107,22 +108,10 @@ class TeamService:
             )
         )
 
-    def _read_settings_file(self) -> dict:
-        if self.settings is None or not self.settings.settings_path.exists():
-            return {}
-        try:
-            return json.loads(self.settings.settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {}
-
-    def _write_settings_file(self, data: dict) -> None:
+    def _sync_team_settings(self, team: Team) -> None:
         if self.settings is None:
             return
-        self.settings.pocketStudio_home.mkdir(parents=True, exist_ok=True)
-        self.settings.settings_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-    def _sync_team_settings(self, team: Team) -> None:
-        data = self._read_settings_file()
+        data = read_json_object(self.settings.settings_path)
         teams = data.setdefault("teams", {})
         teams[team.id] = {
             "name": team.name,
@@ -132,14 +121,16 @@ class TeamService:
             "max_rounds": team.max_rounds,
             "stop_when_idle": team.stop_when_idle,
         }
-        self._write_settings_file(data)
+        write_json_object(self.settings.settings_path, data)
 
     def _remove_team_settings(self, team_id: str) -> None:
-        data = self._read_settings_file()
+        if self.settings is None:
+            return
+        data = read_json_object(self.settings.settings_path)
         teams = data.get("teams")
         if isinstance(teams, dict) and team_id in teams:
             teams.pop(team_id, None)
-            self._write_settings_file(data)
+            write_json_object(self.settings.settings_path, data)
 
     @staticmethod
     def _to_team(row) -> Team:

@@ -23,8 +23,11 @@ def test_agent_workspace_prompt_memory_and_skills() -> None:
         assert (workspace / "heartbeat.md").exists()
         assert (workspace / "memory").is_dir()
         assert (workspace / ".agents" / "skills").is_dir()
+        assert (workspace / ".agents" / "skills" / "tasks" / "SKILL.md").is_file()
+        assert (workspace / ".agents" / "skills" / "pocketstudio-admin" / "SKILL.md").is_file()
         assert (workspace / ".pocketStudio" / "SOUL.md").exists()
         assert (workspace / ".claude" / "skills").exists()
+        assert (workspace / ".codex" / "skills").exists()
 
         prompt_update = client.put(
             f"/api/agents/{agent_id}/system-prompt",
@@ -99,6 +102,8 @@ def test_agent_workspace_status_and_repair() -> None:
         assert "heartbeat.md" in {Path(path).name for path in repaired.json()["repaired"]}
         assert (workspace / "heartbeat.md").exists()
         assert (workspace / "memory").is_dir()
+        assert (workspace / ".agents" / "skills" / "tasks" / "SKILL.md").is_file()
+        assert (workspace / ".codex" / "skills").exists()
         assert healthy.json()["ok"] is True
 
 

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from pocketStudio.api.errors import not_found
+from pocketStudio.api.payloads import agent_config
 from pocketStudio.core.dependencies import get_agent_service
 from pocketStudio.models import Agent, AgentCreate
 from pocketStudio.services.agent_service import AgentService
@@ -49,7 +50,7 @@ def update_agent(agent_id: str, payload: dict, service: AgentService = Depends(g
     )
     if system_prompt is not None:
         service.save_system_prompt_file(agent_id, system_prompt)
-    return {"ok": True, "agent": _agent_config_payload(agent), "provisioned": is_new}
+    return {"ok": True, "agent": agent_config(agent), "provisioned": is_new}
 
 
 @router.get("/{agent_id}", response_model=Agent)
@@ -64,14 +65,3 @@ def get_agent(agent_id: str, service: AgentService = Depends(get_agent_service))
 def delete_agent(agent_id: str, service: AgentService = Depends(get_agent_service)) -> dict:
     service.delete(agent_id)
     return {"ok": True}
-
-
-def _agent_config_payload(agent: Agent) -> dict:
-    return {
-        "name": agent.name,
-        "provider": agent.provider,
-        "model": agent.model or "",
-        "working_directory": str(agent.workspace),
-        "system_prompt": agent.system_prompt or agent.role,
-        "heartbeat": {"enabled": agent.heartbeat_enabled, "interval": agent.heartbeat_interval},
-    }
