@@ -304,6 +304,29 @@ def test_cli_version_does_not_call_api(capsys) -> None:
     assert '"version":' in output
 
 
+def test_cli_visualizer_commands_dispatch_to_visualizer(monkeypatch) -> None:
+    calls = []
+
+    def fake_team_visualizer(client, team_id=None, interval=1.0, once=False, event_limit=80, clear_screen=True):
+        calls.append(("visualize", client.base_url, team_id, interval, once, event_limit, clear_screen))
+        return 0
+
+    def fake_chatroom_viewer(client, team_id, interval=1.0, once=False, send=None, sender="user", limit=50, clear_screen=True):
+        calls.append(("chatroom", client.base_url, team_id, interval, once, send, sender, limit, clear_screen))
+        return 0
+
+    monkeypatch.setattr(cli, "run_team_visualizer", fake_team_visualizer)
+    monkeypatch.setattr(cli, "run_chatroom_viewer", fake_chatroom_viewer)
+
+    assert cli.main(["visualize", "--team", "dev", "--interval", "0.5", "--events", "25", "--no-clear", "--once"], client=FakeClient()) == 0
+    assert cli.main(["chatroom", "dev", "--send", "hello", "--sender", "Tester", "--limit", "10", "--no-clear", "--once"], client=FakeClient()) == 0
+
+    assert calls == [
+        ("visualize", "http://127.0.0.1:3777", "dev", 0.5, True, 25, False),
+        ("chatroom", "http://127.0.0.1:3777", "dev", 1.0, True, "hello", "Tester", 10, False),
+    ]
+
+
 def test_cli_worker_maintenance_maps_to_worker_endpoint() -> None:
     client = FakeClient()
 

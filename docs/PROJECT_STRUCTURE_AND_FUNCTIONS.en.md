@@ -1209,3 +1209,46 @@ Class, data model, service object, or exception type.
 | `async _process_next_available(self, newest: bool=False)` | Controls a background worker, scheduler, or processing flow. |
 | `_record_failure(self, exc: Exception)` | Helper method for its service or type. |
 | `async _run(self)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+
+### `pocketStudio/visualizer.py`
+
+Package entry point or application entry point.
+
+| Function | Usage |
+|---|---|
+| `json_loads(body: str)` | Module-level helper. Review callers and tests before changing behavior. |
+| `json_dumps(payload: dict[str, Any])` | Module-level helper. Review callers and tests before changing behavior. |
+| `normalize_agents(raw: Any)` | Converts, parses, or formats internal data. |
+| `normalize_teams(raw: Any)` | Converts, parses, or formats internal data. |
+| `normalize_office_events(raw: Any)` | Converts, parses, or formats internal data. |
+| `build_agent_states(agents: dict[str, dict[str, Any]], teams: dict[str, dict[str, Any]], events: list[dict[str, Any]], team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `build_flows(events: list[dict[str, Any]], team_id: str \| None=None, limit: int=8)` | Module-level helper. Review callers and tests before changing behavior. |
+| `visible_agent_ids(agents: dict[str, dict[str, Any]], teams: dict[str, dict[str, Any]], team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `render_team_dashboard(snapshot: VisualizerSnapshot, team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `render_team_lines(teams: dict[str, dict[str, Any]], team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `render_chatroom(team_id: str, messages: list[dict[str, Any]], connected: bool=True, limit: int=50)` | Module-level helper. Review callers and tests before changing behavior. |
+| `format_event(event: dict[str, Any])` | Converts, parses, or formats internal data. |
+| `compact_text(text: str, max_length: int)` | Module-level helper. Review callers and tests before changing behavior. |
+| `run_team_visualizer(client: VisualizerClient, team_id: str \| None=None, interval: float=1.0, once: bool=False, event_limit: int=80, clear_screen: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `run_chatroom_viewer(client: VisualizerClient, team_id: str, interval: float=1.0, once: bool=False, send: str \| None=None, sender: str='user', limit: int=50, clear_screen: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+
+#### `AgentVisualState`
+
+Class, data model, service object, or exception type.
+
+#### `VisualizerSnapshot`
+
+Class, data model, service object, or exception type.
+
+#### `VisualizerClient`
+
+Class, data model, service object, or exception type.
+
+| Method | Usage |
+|---|---|
+| `__init__(self, base_url: str \| None=None, timeout: float=5.0)` | Python object lifecycle or protocol method. |
+| `get_json(self, path: str)` | Reads one resource, status object, or derived view. |
+| `post_json(self, path: str, payload: dict[str, Any])` | Helper method for its service or type. |
+| `snapshot(self, team_id: str \| None=None, event_limit: int=80)` | Helper method for its service or type. |
+| `chat_messages(self, team_id: str, limit: int=50, since: int=0)` | Helper method for its service or type. |
+| `post_chat(self, team_id: str, message: str, sender: str='user')` | Helper method for its service or type. |
