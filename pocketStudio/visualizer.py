@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from typing import Any
 
 
 DEFAULT_API_URL = "http://127.0.0.1:3777"
+_WINDOWS_VT_ENABLED: bool | None = None
 
 
 @dataclass
@@ -314,6 +315,86 @@ def compact_text(text: str, max_length: int) -> str:
     return normalized[: max_length - 1] + "…"
 
 
+def clear_terminal() -> None:
+    if os.name == "nt":
+        if _enable_windows_virtual_terminal():
+            sys.stdout.write("\x1b[2J\x1b[H")
+            sys.stdout.flush()
+            return
+        if _clear_windows_console():
+            return
+    sys.stdout.write("\x1b[2J\x1b[H")
+    sys.stdout.flush()
+
+
+def _enable_windows_virtual_terminal() -> bool:
+    global _WINDOWS_VT_ENABLED
+    if os.name != "nt":
+        return False
+    if _WINDOWS_VT_ENABLED is not None:
+        return _WINDOWS_VT_ENABLED
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            _WINDOWS_VT_ENABLED = False
+            return False
+        enable_virtual_terminal_processing = 0x0004
+        if mode.value & enable_virtual_terminal_processing:
+            _WINDOWS_VT_ENABLED = True
+            return True
+        _WINDOWS_VT_ENABLED = bool(kernel32.SetConsoleMode(handle, mode.value | enable_virtual_terminal_processing))
+        return _WINDOWS_VT_ENABLED
+    except Exception:
+        _WINDOWS_VT_ENABLED = False
+        return False
+
+
+def _clear_windows_console() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        class Coord(ctypes.Structure):
+            _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+        class SmallRect(ctypes.Structure):
+            _fields_ = [
+                ("Left", ctypes.c_short),
+                ("Top", ctypes.c_short),
+                ("Right", ctypes.c_short),
+                ("Bottom", ctypes.c_short),
+            ]
+
+        class ConsoleScreenBufferInfo(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", Coord),
+                ("dwCursorPosition", Coord),
+                ("wAttributes", ctypes.c_ushort),
+                ("srWindow", SmallRect),
+                ("dwMaximumWindowSize", Coord),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        info = ConsoleScreenBufferInfo()
+        if not kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
+            return False
+        origin = Coord(0, 0)
+        cell_count = int(info.dwSize.X) * int(info.dwSize.Y)
+        written = ctypes.c_ulong()
+        kernel32.FillConsoleOutputCharacterW(handle, " ", cell_count, origin, ctypes.byref(written))
+        kernel32.FillConsoleOutputAttribute(handle, info.wAttributes, cell_count, origin, ctypes.byref(written))
+        kernel32.SetConsoleCursorPosition(handle, origin)
+        return True
+    except Exception:
+        return False
+
+
 def run_team_visualizer(
     client: VisualizerClient,
     team_id: str | None = None,
@@ -325,8 +406,8 @@ def run_team_visualizer(
     while True:
         snapshot = client.snapshot(team_id=team_id, event_limit=event_limit)
         if clear_screen:
-            print("\033[2J\033[H", end="")
-        print(render_team_dashboard(snapshot, team_id=team_id))
+            clear_terminal()
+        print(render_team_dashboard(snapshot, team_id=team_id), flush=True)
         if once:
             return 0
         time.sleep(interval)
@@ -356,8 +437,8 @@ def run_chatroom_viewer(
             if isinstance(last_id, int):
                 since = last_id
         if clear_screen:
-            print("\033[2J\033[H", end="")
-        print(render_chatroom(team_id, messages, limit=limit))
+            clear_terminal()
+        print(render_chatroom(team_id, messages, limit=limit), flush=True)
         if once:
             return 0
         time.sleep(interval)

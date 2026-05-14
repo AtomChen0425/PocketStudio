@@ -7,6 +7,8 @@ from pocketStudio.visualizer import (
     normalize_teams,
     render_chatroom,
     render_team_dashboard,
+    run_chatroom_viewer,
+    run_team_visualizer,
 )
 
 
@@ -102,3 +104,41 @@ def test_render_chatroom_formats_messages() -> None:
 
     assert "pocketStudio Chatroom #dev" in rendered
     assert "@lead: hello team" in rendered
+
+
+def test_run_visualizers_clear_in_place_when_enabled(monkeypatch, capsys) -> None:
+    calls = []
+
+    class FakeClient:
+        def snapshot(self, team_id=None, event_limit=80):
+            return VisualizerSnapshot(agents={}, teams={}, events=[], queue_status={}, flows=[])
+
+        def chat_messages(self, team_id, limit=50, since=0):
+            return []
+
+    monkeypatch.setattr("pocketStudio.visualizer.clear_terminal", lambda: calls.append("clear"))
+
+    assert run_team_visualizer(FakeClient(), once=True) == 0
+    assert run_chatroom_viewer(FakeClient(), "dev", once=True) == 0
+
+    assert calls == ["clear", "clear"]
+    output = capsys.readouterr().out
+    assert "\x1b[2J" not in output
+
+
+def test_run_visualizers_can_skip_clear(monkeypatch) -> None:
+    calls = []
+
+    class FakeClient:
+        def snapshot(self, team_id=None, event_limit=80):
+            return VisualizerSnapshot(agents={}, teams={}, events=[], queue_status={}, flows=[])
+
+        def chat_messages(self, team_id, limit=50, since=0):
+            return []
+
+    monkeypatch.setattr("pocketStudio.visualizer.clear_terminal", lambda: calls.append("clear"))
+
+    assert run_team_visualizer(FakeClient(), once=True, clear_screen=False) == 0
+    assert run_chatroom_viewer(FakeClient(), "dev", once=True, clear_screen=False) == 0
+
+    assert calls == []

@@ -1229,6 +1229,9 @@ Package entry point or application entry point.
 | `render_chatroom(team_id: str, messages: list[dict[str, Any]], connected: bool=True, limit: int=50)` | Module-level helper. Review callers and tests before changing behavior. |
 | `format_event(event: dict[str, Any])` | Converts, parses, or formats internal data. |
 | `compact_text(text: str, max_length: int)` | Module-level helper. Review callers and tests before changing behavior. |
+| `clear_terminal()` | Deletes a resource or clears state. |
+| `_enable_windows_virtual_terminal()` | Module-level helper. Review callers and tests before changing behavior. |
+| `_clear_windows_console()` | Deletes a resource or clears state. |
 | `run_team_visualizer(client: VisualizerClient, team_id: str \| None=None, interval: float=1.0, once: bool=False, event_limit: int=80, clear_screen: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `run_chatroom_viewer(client: VisualizerClient, team_id: str, interval: float=1.0, once: bool=False, send: str \| None=None, sender: str='user', limit: int=50, clear_screen: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 
