@@ -60,6 +60,21 @@ class AgentIdEchoProvider(AgentProvider):
         return ProviderResponse(text=f"{request.agent.id} says hello")
 
 
+class TeamRelayProvider(AgentProvider):
+    name = "team-relay"
+
+    def __init__(self) -> None:
+        self.inputs: list[tuple[str, str]] = []
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        self.inputs.append((request.agent.id, request.input))
+        if request.agent.id == "lead" and "Teammate results:" in request.input:
+            return ProviderResponse(text=f"final summary includes teammates:\n{request.input}")
+        if request.agent.id == "lead":
+            return ProviderResponse(text="Leader plan [@coder: implement API] [@reviewer: review design]")
+        return ProviderResponse(text=f"{request.agent.id} result from:\n{request.input}")
+
+
 def test_chain_team_processes_agents_in_order() -> None:
     home = temp_home()
     try:
@@ -76,8 +91,9 @@ def test_chain_team_processes_agents_in_order() -> None:
         chat = orchestrator.chat.list("dev")
 
         assert stored.status == "done"
-        assert [run.agent_id for run in result.runs] == ["planner", "coder"]
+        assert [run.agent_id for run in result.runs] == ["planner", "coder", "planner"]
         assert result.output == result.runs[-1].output
+        assert "Teammate results:" in result.output
         assert chat[0].message == result.output
     finally:
         shutil.rmtree(home, ignore_errors=True)
@@ -97,9 +113,46 @@ def test_team_chain_does_not_store_teammate_output_as_user_input() -> None:
 
         planner_messages = orchestrator.queue.get_agent_messages("planner")
         coder_messages = orchestrator.queue.get_agent_messages("coder")
-        assert [item.role for item in planner_messages] == ["user", "assistant"]
+        assert [item.role for item in planner_messages] == ["user", "assistant", "user", "assistant"]
         assert [item.role for item in coder_messages] == ["assistant"]
         assert all(not (item.role == "user" and "planner says hello" in item.content) for item in coder_messages)
+        assert "coder says hello" in planner_messages[-2].content
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_chain_team_leader_directs_members_and_summarizes_their_results() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        provider = TeamRelayProvider()
+        orchestrator.providers.register(provider)
+        orchestrator.agents.create(AgentCreate(id="lead", name="Lead", role="Leads", provider="team-relay"))
+        orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes", provider="team-relay"))
+        orchestrator.agents.create(AgentCreate(id="reviewer", name="Reviewer", role="Reviews", provider="team-relay"))
+        orchestrator.teams.create(
+            TeamCreate(
+                id="dev",
+                name="Dev",
+                mode=TeamMode.chain,
+                agent_ids=["lead", "coder", "reviewer"],
+                leaderAgent="lead",
+            )
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Build the API"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+
+        assert [run.agent_id for run in result.runs] == ["lead", "coder", "reviewer", "lead"]
+        coder_input = next(input_text for agent_id, input_text in provider.inputs if agent_id == "coder")
+        reviewer_input = next(input_text for agent_id, input_text in provider.inputs if agent_id == "reviewer")
+        final_leader_input = provider.inputs[-1][1]
+        assert "Team leader @lead context:" in coder_input
+        assert "Directed to you:\nimplement API" in coder_input
+        assert "Directed to you:\nreview design" in reviewer_input
+        assert "## @coder" in final_leader_input
+        assert "## @reviewer" in final_leader_input
+        assert result.output.startswith("final summary includes teammates")
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
@@ -293,7 +346,7 @@ def test_team_leader_runs_first_and_mentions_enqueue_teammates() -> None:
         queued = orchestrator.queue.list(status=MessageStatus.queued)
         chat = orchestrator.chat.list("dev")
 
-        assert [run.agent_id for run in result.runs] == ["reviewer", "planner", "coder"]
+        assert [run.agent_id for run in result.runs] == ["reviewer", "planner", "coder", "reviewer"]
         assert any(item.target == "@agent:coder" and "Directed to you:" in item.content for item in queued)
         assert any(item.sender == "reviewer" and "kickoff" in item.message for item in chat)
     finally:
@@ -520,9 +573,10 @@ def test_team_iterative_rounds_run_mentions_inline_until_idle() -> None:
             if item.sender.startswith("team:dev:")
         ]
 
-        assert [run.agent_id for run in result.runs] == ["lead", "coder", "coder"]
+        assert [run.agent_id for run in result.runs] == ["lead", "coder", "coder", "lead"]
         assert any(run.agent_id == "coder" and "implement the API" in run.input for run in result.runs)
         assert queued_mentions == []
+        assert "Teammate results:" in result.output
         assert "Coder (Codes) received" in result.output
     finally:
         shutil.rmtree(home, ignore_errors=True)

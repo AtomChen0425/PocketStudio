@@ -882,6 +882,10 @@ Class, data model, service object, or exception type.
 | `async _run_team(self, message: QueueMessage, team: Team)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _run_iterative_rounds(self, team: Team, message: QueueMessage, agents: list[Agent], seed_runs: list[AgentRun], max_rounds: int)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent])` | Helper method for its service or type. |
+| `_member_chain_input(self, team: Team, original_request: str, leader_run: AgentRun, previous_member_runs: list[AgentRun], member_id: str)` | Helper method for its service or type. |
+| `_leader_summary_input(self, team: Team, original_request: str, leader_run: AgentRun, member_runs: list[AgentRun])` | Helper method for its service or type. |
+| `_directed_messages_for_member(self, leader_output: str, member_id: str)` | Helper method for its service or type. |
+| `_format_runs(runs: list[AgentRun])` | Converts, parses, or formats internal data. |
 | `async _handle_team_tags(self, team: Team, run: AgentRun, message: QueueMessage, agents: list[Agent], enqueue_mentions: bool=True, process_chatrooms: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _handle_direct_agent_team_tags(self, agent: Agent, run: AgentRun, message: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_broadcast_chatroom(self, team: Team, from_agent: str, content: str, agents: list[Agent], parent: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |

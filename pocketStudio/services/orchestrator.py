@@ -98,27 +98,39 @@ class Orchestrator:
         if not agents:
             raise ValueError(f"Team '{team.id}' has no agents")
 
+        leader_run_for_summary: AgentRun | None = None
+        leader_agent_for_summary: Agent | None = None
         if team.mode == TeamMode.chain:
             runs: list[AgentRun] = []
             ordered_agents = self._order_agents_for_team(team, agents)
-            current_input = message.content
             context: list[str] = []
             chatroom_origin = self._is_chatroom_origin(message)
-            for index, agent in enumerate(ordered_agents):
-                if index == 0 and not chatroom_origin:
-                    self.queue.insert_agent_message(
-                        agent.id,
-                        "user",
-                        current_input,
-                        str(message.id),
-                        sender=message.sender,
-                    )
-                run = await self._run_agent(agent, current_input, context)
+            leader = ordered_agents[0]
+            leader_agent_for_summary = leader
+            member_agents = ordered_agents[1:]
+            if not chatroom_origin:
+                self.queue.insert_agent_message(
+                    leader.id,
+                    "user",
+                    message.content,
+                    str(message.id),
+                    sender=message.sender,
+                )
+            leader_run = await self._run_agent(leader, message.content, context)
+            leader_run_for_summary = leader_run
+            runs.append(leader_run)
+            self.queue.insert_agent_message(leader.id, "assistant", leader_run.output, str(message.id), sender=leader.id)
+            context.append(leader_run.output)
+            await self._handle_team_tags(team, leader_run, message, agents, enqueue_mentions=team.max_rounds <= 1)
+
+            for agent in member_agents:
+                member_input = self._member_chain_input(team, message.content, leader_run, runs[1:], agent.id)
+                run = await self._run_agent(agent, member_input, context)
                 runs.append(run)
                 self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                 context.append(run.output)
                 await self._handle_team_tags(team, run, message, agents, enqueue_mentions=team.max_rounds <= 1)
-                current_input = run.output
+
             output = runs[-1].output
         else:
             ordered_agents = self._order_agents_for_team(team, agents)
@@ -140,6 +152,33 @@ class Orchestrator:
             runs.extend(iterative_runs)
             if iterative_runs:
                 output = "\n\n".join(f"## {run.agent_id}\n{run.output}" for run in runs)
+
+        if (
+            team.mode == TeamMode.chain
+            and leader_agent_for_summary is not None
+            and leader_run_for_summary is not None
+            and not self._is_chatroom_origin(message)
+            and any(run.agent_id != leader_agent_for_summary.id for run in runs)
+        ):
+            member_results = [run for run in runs if run is not leader_run_for_summary]
+            summary_input = self._leader_summary_input(team, message.content, leader_run_for_summary, member_results)
+            self.queue.insert_agent_message(
+                leader_agent_for_summary.id,
+                "user",
+                summary_input,
+                str(message.id),
+                sender=f"team:{team.id}",
+            )
+            final_run = await self._run_agent(leader_agent_for_summary, summary_input, [run.output for run in runs])
+            runs.append(final_run)
+            self.queue.insert_agent_message(
+                leader_agent_for_summary.id,
+                "assistant",
+                final_run.output,
+                str(message.id),
+                sender=leader_agent_for_summary.id,
+            )
+            output = final_run.output
 
         if self._is_chatroom_origin(message):
             self._post_chatroom_run_outputs(team, runs)
@@ -199,6 +238,56 @@ class Orchestrator:
                     routed_content = f"{shared_context}\n\n------\n\nDirected to you:\n{content}" if shared_context else content
                     mentions.append((run.agent_id, teammate_id, routed_content))
         return mentions
+
+    def _member_chain_input(
+        self,
+        team: Team,
+        original_request: str,
+        leader_run: AgentRun,
+        previous_member_runs: list[AgentRun],
+        member_id: str,
+    ) -> str:
+        shared_context = self._strip_tags(leader_run.output, "@")
+        directed = self._directed_messages_for_member(leader_run.output, member_id)
+        chunks = [
+            f"Team #{team.id} request:\n{original_request}",
+            f"Team leader @{leader_run.agent_id} context:\n{shared_context or leader_run.output}",
+        ]
+        if directed:
+            chunks.append("Directed to you:\n" + "\n\n".join(directed))
+        else:
+            chunks.append("Directed to you:\nContribute your part based on the team leader context above.")
+        if previous_member_runs:
+            chunks.append("Previous teammate results:\n" + self._format_runs(previous_member_runs))
+        return "\n\n------\n\n".join(chunks)
+
+    def _leader_summary_input(
+        self,
+        team: Team,
+        original_request: str,
+        leader_run: AgentRun,
+        member_runs: list[AgentRun],
+    ) -> str:
+        return "\n\n------\n\n".join(
+            [
+                f"Team #{team.id} original request:\n{original_request}",
+                f"Your initial team direction:\n{leader_run.output}",
+                "Teammate results:\n" + self._format_runs(member_runs),
+                "Produce the final team response for the user. Synthesize the teammate results, keep important details, and call out any unresolved work.",
+            ]
+        )
+
+    def _directed_messages_for_member(self, leader_output: str, member_id: str) -> list[str]:
+        lookup = member_id.lower()
+        messages: list[str] = []
+        for raw_ids, content in self._extract_tags(leader_output, "@"):
+            if lookup in self._split_candidate_ids(raw_ids):
+                messages.append(content)
+        return messages
+
+    @staticmethod
+    def _format_runs(runs: list[AgentRun]) -> str:
+        return "\n\n".join(f"## @{run.agent_id}\n{run.output}" for run in runs)
 
     async def _handle_team_tags(
         self,
