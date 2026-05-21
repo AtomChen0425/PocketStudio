@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pocketStudio.providers.base import AgentProvider, ProviderRequest, ProviderResponse
 from pocketStudio.providers.subprocess import ProcessRegistry, SubprocessHarness
-
+from pocketStudio.services.agent_service import AgentService
 
 class CodexProvider(AgentProvider):
     name = "codex"
@@ -22,7 +22,12 @@ class CodexProvider(AgentProvider):
         self.command = command or "codex"
         self.base_args = base_args
         self.harness = SubprocessHarness(command=self.command, registry=registry, timeout_seconds=timeout_seconds)
-
+    def setup_workspace(self, workspace: Path) -> None:
+        codex_dir = workspace / ".codex"
+        codex_dir.mkdir(exist_ok=True)
+        root_skills_dir = workspace / ".agents" / "skills"
+        AgentService.ensure_tool_skills_link(root_skills_dir, codex_dir / "skills")
+        
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         args, stdin_text = self._args(request)
         output = ""

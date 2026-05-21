@@ -48,7 +48,7 @@ class Orchestrator:
         self.events = events
         self.providers = providers
         self.projects = projects
-
+        self._initialized_workspaces: set[str] = set()
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
         return self.queue.enqueue(payload)
 
@@ -467,6 +467,11 @@ class Orchestrator:
         if not agent.enabled:
             raise ValueError(f"Agent '{agent.id}' is disabled")
         provider = self.providers.get(agent.provider)
+        
+        if agent.id not in self._initialized_workspaces:
+            provider.setup_workspace(agent.workspace)
+            self._initialized_workspaces.add(agent.id)
+            
         self.events.emit("agent.started", {"agent_id": agent.id, "provider": agent.provider})
 
         def progress(payload: dict) -> None:

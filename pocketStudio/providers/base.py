@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
-
+from pathlib import Path
 from pocketStudio.models import Agent
 
 
@@ -25,7 +25,9 @@ class ProviderResponse(BaseModel):
 
 class AgentProvider(ABC):
     name: str
-
+    def setup_workspace(self, workspace: Path) -> None:
+        """Set up the workspace for the provider."""
+        pass
     @abstractmethod
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         """Execute an agent turn."""
