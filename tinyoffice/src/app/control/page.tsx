@@ -1157,6 +1157,10 @@ function formatEventDetail(event: EventData): string {
   if (event.channel) parts.push(`[${event.channel}]`);
   if (event.sender) parts.push(`from ${event.sender}`);
   if (event.teamId) parts.push(`team:${event.teamId}`);
+  if (event.providerEventType) parts.push(String(event.providerEventType));
+  if (event.tool) parts.push(`tool:${event.tool}`);
+  if (event.summary) parts.push(String(event.summary).substring(0, 100));
+  if (event.content && !event.summary) parts.push(String(event.content).substring(0, 100));
   if (event.message) parts.push(String(event.message).substring(0, 60));
   if (event.responseLength) parts.push(`${event.responseLength} chars`);
   return parts.join(" ") || event.type;

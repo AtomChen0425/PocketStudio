@@ -617,6 +617,12 @@ Class, data model, service object, or exception type.
 | `_skill_context(workspace: Path)` | Helper method for its service or type. |
 | `_extract_text(cls, stdout: str)` | Converts, parses, or formats internal data. |
 | `_extract_event_text(line: str)` | Converts, parses, or formats internal data. |
+| `_parse_event(line: str)` | Converts, parses, or formats internal data. |
+| `_extract_event_text_from_event(event: dict \| None)` | Converts, parses, or formats internal data. |
+| `_progress_payload(cls, event: dict)` | Builds API or compatibility-layer response/request payloads. |
+| `_tool_name(event: dict, item: dict)` | Helper method for its service or type. |
+| `_event_summary(event_type: str, item: dict, content: str, tool: str \| None)` | Helper method for its service or type. |
+| `_compact_event(event: dict)` | Helper method for its service or type. |
 | `is_alive(self, agent_id: str)` | Helper method for its service or type. |
 | `async kill_agent(self, agent_id: str)` | Helper method for its service or type. |
 
@@ -876,6 +882,10 @@ Class, data model, service object, or exception type.
 | `async _run_team(self, message: QueueMessage, team: Team)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _run_iterative_rounds(self, team: Team, message: QueueMessage, agents: list[Agent], seed_runs: list[AgentRun], max_rounds: int)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent])` | Helper method for its service or type. |
+| `_member_chain_input(self, team: Team, original_request: str, leader_run: AgentRun, previous_member_runs: list[AgentRun], member_id: str)` | Helper method for its service or type. |
+| `_leader_summary_input(self, team: Team, original_request: str, leader_run: AgentRun, member_runs: list[AgentRun])` | Helper method for its service or type. |
+| `_directed_messages_for_member(self, leader_output: str, member_id: str)` | Helper method for its service or type. |
+| `_format_runs(runs: list[AgentRun])` | Converts, parses, or formats internal data. |
 | `async _handle_team_tags(self, team: Team, run: AgentRun, message: QueueMessage, agents: list[Agent], enqueue_mentions: bool=True, process_chatrooms: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _handle_direct_agent_team_tags(self, agent: Agent, run: AgentRun, message: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_broadcast_chatroom(self, team: Team, from_agent: str, content: str, agents: list[Agent], parent: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
@@ -1203,3 +1213,49 @@ Class, data model, service object, or exception type.
 | `async _process_next_available(self, newest: bool=False)` | Controls a background worker, scheduler, or processing flow. |
 | `_record_failure(self, exc: Exception)` | Helper method for its service or type. |
 | `async _run(self)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+
+### `pocketStudio/visualizer.py`
+
+Package entry point or application entry point.
+
+| Function | Usage |
+|---|---|
+| `json_loads(body: str)` | Module-level helper. Review callers and tests before changing behavior. |
+| `json_dumps(payload: dict[str, Any])` | Module-level helper. Review callers and tests before changing behavior. |
+| `normalize_agents(raw: Any)` | Converts, parses, or formats internal data. |
+| `normalize_teams(raw: Any)` | Converts, parses, or formats internal data. |
+| `normalize_office_events(raw: Any)` | Converts, parses, or formats internal data. |
+| `build_agent_states(agents: dict[str, dict[str, Any]], teams: dict[str, dict[str, Any]], events: list[dict[str, Any]], team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `build_flows(events: list[dict[str, Any]], team_id: str \| None=None, limit: int=8)` | Module-level helper. Review callers and tests before changing behavior. |
+| `visible_agent_ids(agents: dict[str, dict[str, Any]], teams: dict[str, dict[str, Any]], team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `render_team_dashboard(snapshot: VisualizerSnapshot, team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `render_team_lines(teams: dict[str, dict[str, Any]], team_id: str \| None=None)` | Module-level helper. Review callers and tests before changing behavior. |
+| `render_chatroom(team_id: str, messages: list[dict[str, Any]], connected: bool=True, limit: int=50)` | Module-level helper. Review callers and tests before changing behavior. |
+| `format_event(event: dict[str, Any])` | Converts, parses, or formats internal data. |
+| `compact_text(text: str, max_length: int)` | Module-level helper. Review callers and tests before changing behavior. |
+| `clear_terminal()` | Deletes a resource or clears state. |
+| `_enable_windows_virtual_terminal()` | Module-level helper. Review callers and tests before changing behavior. |
+| `_clear_windows_console()` | Deletes a resource or clears state. |
+| `run_team_visualizer(client: VisualizerClient, team_id: str \| None=None, interval: float=1.0, once: bool=False, event_limit: int=80, clear_screen: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `run_chatroom_viewer(client: VisualizerClient, team_id: str, interval: float=1.0, once: bool=False, send: str \| None=None, sender: str='user', limit: int=50, clear_screen: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+
+#### `AgentVisualState`
+
+Class, data model, service object, or exception type.
+
+#### `VisualizerSnapshot`
+
+Class, data model, service object, or exception type.
+
+#### `VisualizerClient`
+
+Class, data model, service object, or exception type.
+
+| Method | Usage |
+|---|---|
+| `__init__(self, base_url: str \| None=None, timeout: float=5.0)` | Python object lifecycle or protocol method. |
+| `get_json(self, path: str)` | Reads one resource, status object, or derived view. |
+| `post_json(self, path: str, payload: dict[str, Any])` | Helper method for its service or type. |
+| `snapshot(self, team_id: str \| None=None, event_limit: int=80)` | Helper method for its service or type. |
+| `chat_messages(self, team_id: str, limit: int=50, since: int=0)` | Helper method for its service or type. |
+| `post_chat(self, team_id: str, message: str, sender: str='user')` | Helper method for its service or type. |

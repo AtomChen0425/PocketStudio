@@ -91,11 +91,7 @@ class AgentService:
         skills_dir = workspace / ".agents" / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
         self._sync_root_skills(skills_dir)
-        (workspace / ".claude").mkdir(exist_ok=True)
-        (workspace / ".codex").mkdir(exist_ok=True)
         (workspace / "memory").mkdir(exist_ok=True)
-        self.ensure_tool_skills_link(skills_dir, workspace / ".claude" / "skills")
-        self.ensure_tool_skills_link(skills_dir, workspace / ".codex" / "skills")
         agents_md = workspace / "AGENTS.md"
         if not agents_md.exists():
             agents_md.write_text("", encoding="utf-8")
@@ -272,8 +268,6 @@ class AgentService:
         skill_path = target / "SKILL.md"
         if not skill_path.exists():
             skill_path.write_text(f"# {ref}\n\nInstalled placeholder for pocketStudio.\n", encoding="utf-8")
-        self.ensure_tool_skills_link(agent.workspace / ".agents" / "skills", agent.workspace / ".claude" / "skills")
-        self.ensure_tool_skills_link(agent.workspace / ".agents" / "skills", agent.workspace / ".codex" / "skills")
         return skill_path
 
     @classmethod
@@ -334,10 +328,6 @@ class AgentService:
             AgentService._sync_skill_tree(source, target)
 
     @staticmethod
-    def _ensure_claude_skills_link(workspace: Path) -> None:
-        AgentService.ensure_tool_skills_link(workspace / ".agents" / "skills", workspace / ".claude" / "skills")
-
-    @staticmethod
     def _sync_skill_tree(source: Path, target: Path) -> None:
         if source.resolve() == target.resolve():
             return
@@ -365,14 +355,10 @@ class AgentService:
             ("directory", workspace),
             ("directory", workspace / ".pocketStudio"),
             ("directory", workspace / ".agents" / "skills"),
-            ("directory", workspace / ".claude"),
-            ("directory", workspace / ".codex"),
             ("directory", workspace / "memory"),
             ("file", workspace / "AGENTS.md"),
             ("file", workspace / "heartbeat.md"),
             ("file", workspace / ".pocketStudio" / "SOUL.md"),
-            ("skillsLink", workspace / ".claude" / "skills"),
-            ("skillsLink", workspace / ".codex" / "skills"),
         ]
         result = []
         for kind, path in checks:

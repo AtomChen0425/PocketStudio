@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pocketStudio.providers.base import AgentProvider, ProviderRequest, ProviderResponse
 from pocketStudio.providers.subprocess import ProcessRegistry, SubprocessHarness
-
+from pocketStudio.services.agent_service import AgentService
 
 class CodexProvider(AgentProvider):
     name = "codex"
@@ -22,14 +22,22 @@ class CodexProvider(AgentProvider):
         self.command = command or "codex"
         self.base_args = base_args
         self.harness = SubprocessHarness(command=self.command, registry=registry, timeout_seconds=timeout_seconds)
-
+    def setup_workspace(self, workspace: Path) -> None:
+        codex_dir = workspace / ".codex"
+        codex_dir.mkdir(exist_ok=True)
+        root_skills_dir = workspace / ".agents" / "skills"
+        AgentService.ensure_tool_skills_link(root_skills_dir, codex_dir / "skills")
+        
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         args, stdin_text = self._args(request)
         output = ""
 
         def on_line(line: str) -> None:
             nonlocal output
-            text = self._extract_event_text(line)
+            event = self._parse_event(line)
+            if event is not None and request.progress is not None:
+                request.progress(self._progress_payload(event))
+            text = self._extract_event_text_from_event(event) if event is not None else None
             if text:
                 output = text
 
@@ -122,9 +130,19 @@ class CodexProvider(AgentProvider):
 
     @staticmethod
     def _extract_event_text(line: str) -> str | None:
+        return CodexProvider._extract_event_text_from_event(CodexProvider._parse_event(line))
+
+    @staticmethod
+    def _parse_event(line: str) -> dict | None:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            return None
+        return event if isinstance(event, dict) else None
+
+    @staticmethod
+    def _extract_event_text_from_event(event: dict | None) -> str | None:
+        if event is None:
             return None
         if isinstance(event.get("result"), str):
             return event["result"]
@@ -147,6 +165,62 @@ class CodexProvider(AgentProvider):
             if isinstance(item.get("content"), str):
                 return item["content"]
         return None
+
+    @classmethod
+    def _progress_payload(cls, event: dict) -> dict:
+        event_type = str(event.get("type") or "codex.event")
+        item = event.get("item") if isinstance(event.get("item"), dict) else {}
+        content = cls._extract_event_text_from_event(event) or ""
+        tool = cls._tool_name(event, item)
+        summary = cls._event_summary(event_type, item, content, tool)
+        return {
+            "providerEventType": event_type,
+            "summary": summary,
+            "content": content[:4000],
+            "tool": tool,
+            "raw": cls._compact_event(event),
+        }
+
+    @staticmethod
+    def _tool_name(event: dict, item: dict) -> str | None:
+        for source in (item, event):
+            for key in ("tool", "name", "command"):
+                value = source.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        if isinstance(item.get("type"), str) and "tool" in item["type"]:
+            return item["type"]
+        return None
+
+    @staticmethod
+    def _event_summary(event_type: str, item: dict, content: str, tool: str | None) -> str:
+        item_type = item.get("type") if isinstance(item.get("type"), str) else ""
+        status = item.get("status") if isinstance(item.get("status"), str) else ""
+        if content:
+            return content[:240]
+        if tool:
+            return f"{event_type}: {tool}"
+        if item_type and status:
+            return f"{event_type}: {item_type} {status}"
+        if item_type:
+            return f"{event_type}: {item_type}"
+        return event_type
+
+    @staticmethod
+    def _compact_event(event: dict) -> dict:
+        compact: dict = {}
+        for key in ("type", "message", "result", "text"):
+            value = event.get(key)
+            if isinstance(value, str):
+                compact[key] = value[:1000]
+        item = event.get("item")
+        if isinstance(item, dict):
+            compact["item"] = {
+                key: (value[:1000] if isinstance(value, str) else value)
+                for key, value in item.items()
+                if key in {"type", "status", "name", "text", "command"}
+            }
+        return compact
 
     def is_alive(self, agent_id: str) -> bool:
         return self.harness.registry.is_alive(agent_id)
