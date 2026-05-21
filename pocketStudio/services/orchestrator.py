@@ -21,7 +21,12 @@ from pocketStudio.services.event_service import EventService
 from pocketStudio.services.project_service import ProjectService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
-from pocketStudio.services.team_routing import extract_bracket_tags, strip_bracket_tags
+from pocketStudio.utils.tag_parser import (
+    extract_tags,
+    strip_tags,
+    split_candidate_ids,
+    get_directed_messages,
+)
 
 
 class TeamActions:
@@ -227,10 +232,10 @@ class Orchestrator:
         agent_by_lookup = self._agent_lookup(agents)
         mentions: list[tuple[str, str, str]] = []
         for run in runs:
-            shared_context = self._strip_tags(run.output, "@")
+            shared_context = strip_tags(run.output, "@")
             seen: set[str] = set()
-            for raw_ids, content in self._extract_tags(run.output, "@"):
-                for candidate_id in self._split_candidate_ids(raw_ids):
+            for raw_ids, content in extract_tags(run.output, "@"):
+                for candidate_id in split_candidate_ids(raw_ids):
                     teammate_id = agent_by_lookup.get(candidate_id)
                     if teammate_id is None or teammate_id in seen or teammate_id == run.agent_id:
                         continue
@@ -247,8 +252,8 @@ class Orchestrator:
         previous_member_runs: list[AgentRun],
         member_id: str,
     ) -> str:
-        shared_context = self._strip_tags(leader_run.output, "@")
-        directed = self._directed_messages_for_member(leader_run.output, member_id)
+        shared_context = strip_tags(leader_run.output, "@")
+        directed = get_directed_messages(leader_run.output, member_id)
         chunks = [
             f"Team #{team.id} request:\n{original_request}",
             f"Team leader @{leader_run.agent_id} context:\n{shared_context or leader_run.output}",
@@ -277,14 +282,6 @@ class Orchestrator:
             ]
         )
 
-    def _directed_messages_for_member(self, leader_output: str, member_id: str) -> list[str]:
-        lookup = member_id.lower()
-        messages: list[str] = []
-        for raw_ids, content in self._extract_tags(leader_output, "@"):
-            if lookup in self._split_candidate_ids(raw_ids):
-                messages.append(content)
-        return messages
-
     @staticmethod
     def _format_runs(runs: list[AgentRun]) -> str:
         return "\n\n".join(f"## @{run.agent_id}\n{run.output}" for run in runs)
@@ -300,16 +297,16 @@ class Orchestrator:
     ) -> None:
         agent_by_lookup = self._agent_lookup(agents)
         if process_chatrooms:
-            for team_id, content in self._extract_tags(run.output, "#"):
+            for team_id, content in extract_tags(run.output, "#"):
                 if team_id.lower() == team.id.lower():
                     self.chat.post(team.id, ChatMessageCreate(sender=run.agent_id, message=content))
                     delivered = self._broadcast_chatroom(team, run.agent_id, content, agents, message)
                     self.events.emit("team.chatroom", {"team_id": team.id, "from_agent": run.agent_id, "delivered": delivered})
 
-        shared_context = self._strip_tags(run.output, "@")
+        shared_context = strip_tags(run.output, "@")
         seen_mentions: set[str] = set()
-        for raw_ids, content in self._extract_tags(run.output, "@"):
-            for candidate_id in self._split_candidate_ids(raw_ids):
+        for raw_ids, content in extract_tags(run.output, "@"):
+            for candidate_id in split_candidate_ids(raw_ids):
                 teammate_id = agent_by_lookup.get(candidate_id)
                 if teammate_id is None or teammate_id in seen_mentions or teammate_id == run.agent_id:
                     continue
@@ -347,7 +344,7 @@ class Orchestrator:
             members = [self._agent_for_message(member.id, message) for member in members]
             agents_by_team[team.id] = members
 
-        for team_id, content in self._extract_tags(run.output, "#"):
+        for team_id, content in extract_tags(run.output, "#"):
             team = self._resolve_team_for_tag(team_id, agent_teams, agent.id)
             if team is None:
                 continue
@@ -385,7 +382,7 @@ class Orchestrator:
 
     def _post_chatroom_run_outputs(self, team: Team, runs: list[AgentRun]) -> None:
         for run in runs:
-            message = self._strip_tags(run.output, "#").strip()
+            message = strip_tags(run.output, "#").strip()
             if message:
                 self.chat.post(team.id, ChatMessageCreate(sender=run.agent_id, message=message))
 
@@ -446,22 +443,6 @@ class Orchestrator:
     @staticmethod
     def _agent_lookup(agents: list[Agent]) -> dict[str, str]:
         return {agent.id.lower(): agent.id for agent in agents}
-
-    @staticmethod
-    def _split_candidate_ids(raw_ids: str) -> list[str]:
-        return [item.strip().lower() for item in raw_ids.split(",") if item.strip()]
-
-    @staticmethod
-    def _extract_tags(text: str, prefix: str) -> list[tuple[str, str]]:
-        return [(tag.id, tag.message) for tag in extract_bracket_tags(text, prefix)]
-
-    @staticmethod
-    def _strip_tags(text: str, prefix: str) -> str:
-        return strip_bracket_tags(text, prefix)
-
-    @staticmethod
-    def _extract_bracket_tags(text: str, prefix: str) -> list[tuple[str, str, int, int]]:
-        return [(tag.id, tag.message, tag.start, tag.end) for tag in extract_bracket_tags(text, prefix)]
 
     async def _run_agent(self, agent: Agent, input_text: str, context: list[str]) -> AgentRun:
         if not agent.enabled:
