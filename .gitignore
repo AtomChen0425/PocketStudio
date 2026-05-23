@@ -5,3 +5,9 @@
 /.pocketStudio
 __pycache__/
 /.pytest-local
+pocketstudio.egg-info/dependency_links.txt
+pocketstudio.egg-info/entry_points.txt
+pocketstudio.egg-info/PKG-INFO
+pocketstudio.egg-info/requires.txt
+pocketstudio.egg-info/SOURCES.txt
+pocketstudio.egg-info/top_level.txt
