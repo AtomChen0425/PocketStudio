@@ -92,32 +92,10 @@ class CodexProvider(AgentProvider):
         system_prompt = request.agent.system_prompt or request.agent.role
         if system_prompt:
             chunks.append(f"System instructions:\n{system_prompt}")
-        skill_context = self._skill_context(request.agent.workspace)
-        if skill_context:
-            chunks.append(skill_context)
         if request.context:
             chunks.append("Context:\n" + "\n\n".join(request.context))
         chunks.append(request.input)
         return "\n\n".join(chunks)
-
-    @staticmethod
-    def _skill_context(workspace: Path) -> str:
-        skills_dir = workspace / ".codex" / "skills"
-        if not skills_dir.exists():
-            skills_dir = workspace / ".agents" / "skills"
-        if not skills_dir.exists():
-            return ""
-        skills = []
-        for skill_path in sorted(skills_dir.rglob("SKILL.md")):
-            skill_id = skill_path.parent.name
-            skills.append(f"- {skill_id}: {skill_path}")
-        if not skills:
-            return ""
-        return (
-            "Available pocketStudio skills:\n"
-            + "\n".join(skills)
-            + "\nUse a listed skill when it is relevant, and read its SKILL.md before applying it."
-        )
 
     @classmethod
     def _extract_text(cls, stdout: str) -> str:
