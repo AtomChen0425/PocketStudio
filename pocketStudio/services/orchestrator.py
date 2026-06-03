@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import operator
+from typing import Annotated, Any, TypedDict
 
 from pocketStudio.models import (
     Agent,
@@ -21,6 +23,7 @@ from pocketStudio.services.event_service import EventService
 from pocketStudio.services.project_service import ProjectService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
+from pocketStudio.services.workflow_service import WorkflowService
 from pocketStudio.utils.tag_parser import (
     extract_tags,
     strip_tags,
@@ -35,6 +38,17 @@ class TeamActions:
         self.chatrooms = chatrooms
 
 
+def merge_dicts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    return {**left, **right}
+
+
+class WorkflowState(TypedDict):
+    original_request: str
+    outputs: Annotated[dict[str, str], merge_dicts]
+    runs_by_node: Annotated[dict[str, AgentRun], merge_dicts]
+    run_order: Annotated[list[str], operator.add]
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -45,6 +59,7 @@ class Orchestrator:
         events: EventService,
         providers: ProviderRegistry,
         projects: ProjectService | None = None,
+        workflows: WorkflowService | None = None,
     ) -> None:
         self.agents = agents
         self.teams = teams
@@ -53,6 +68,7 @@ class Orchestrator:
         self.events = events
         self.providers = providers
         self.projects = projects
+        self.workflows = workflows
         self._initialized_workspaces: set[str] = set()
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
         return self.queue.enqueue(payload)
@@ -102,6 +118,11 @@ class Orchestrator:
         agents = [self._agent_for_message(agent_id, message) for agent_id in team.agent_ids]
         if not agents:
             raise ValueError(f"Team '{team.id}' has no agents")
+
+        if self.workflows is not None:
+            workflow = self.workflows.active_for_team(team.id)
+            if workflow is not None:
+                return await self._run_workflow(message, team, agents, workflow)
 
         leader_run_for_summary: AgentRun | None = None
         leader_agent_for_summary: Agent | None = None
@@ -190,6 +211,143 @@ class Orchestrator:
         else:
             self.chat.post(team.id, ChatMessageCreate(sender="TeamManager", message=output))
         return OrchestrationResult(message_id=message.id, target=message.target, runs=runs, output=output)
+
+    async def _run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow) -> OrchestrationResult:
+        definition = workflow.definition
+        order = WorkflowService._topological_order(definition)
+        node_by_id = {node.id: node for node in definition.nodes}
+        agent_by_id = {agent.id: agent for agent in agents}
+        predecessors: dict[str, list[str]] = {node.id: [] for node in definition.nodes}
+        for edge in definition.edges:
+            predecessors[edge.target].append(edge.source)
+
+        compiled_graph = self._build_langgraph_workflow(
+            team=team,
+            workflow_id=workflow.id,
+            message=message,
+            agents=agents,
+            node_by_id=node_by_id,
+            agent_by_id=agent_by_id,
+            predecessors=predecessors,
+            edge_pairs=[(edge.source, edge.target) for edge in definition.edges],
+            entrypoint=definition.entrypoint,
+        )
+        state = await compiled_graph.ainvoke(
+            {"original_request": message.content, "outputs": {}, "runs_by_node": {}, "run_order": []}
+        )
+        runs_by_node = state["runs_by_node"]
+        runs = [runs_by_node[node_id] for node_id in order if node_id in runs_by_node]
+        outputs = state["outputs"]
+
+        output_node = definition.output_node or order[-1]
+        output = outputs[output_node]
+        if self._is_chatroom_origin(message):
+            self._post_chatroom_run_outputs(team, runs)
+        else:
+            self.chat.post(team.id, ChatMessageCreate(sender="TeamManager", message=output))
+        self.events.emit(
+            "team.workflow.completed",
+            {"team_id": team.id, "workflow_id": workflow.id, "nodes": len(runs), "output_node": output_node},
+        )
+        return OrchestrationResult(message_id=message.id, target=message.target, runs=runs, output=output)
+
+    @staticmethod
+    def _workflow_node_input(
+        team: Team,
+        workflow_id: str,
+        original_request: str,
+        node,
+        predecessor_ids: list[str],
+        outputs: dict[str, str],
+    ) -> str:
+        predecessor_text = "\n\n".join(f"## {source}\n{outputs[source]}" for source in predecessor_ids if source in outputs)
+        if node.input_template:
+            try:
+                return node.input_template.format(
+                    team_id=team.id,
+                    workflow_id=workflow_id,
+                    node_id=node.id,
+                    agent_id=node.agent_id,
+                    message=original_request,
+                    predecessor_outputs=predecessor_text,
+                )
+            except KeyError as exc:
+                raise ValueError(f"Workflow node '{node.id}' inputTemplate references unknown field: {exc}") from exc
+        chunks = [f"Team #{team.id} workflow '{workflow_id}' request:\n{original_request}"]
+        if node.prompt:
+            chunks.append(f"Node instruction:\n{node.prompt}")
+        if predecessor_text:
+            chunks.append(f"Upstream results:\n{predecessor_text}")
+        return "\n\n------\n\n".join(chunks)
+
+    def _langchain_runnable_for_agent(self, agent: Agent):
+        try:
+            from langchain_core.runnables import RunnableLambda
+        except ImportError as exc:
+            raise RuntimeError("LangChain is required to execute team workflows") from exc
+
+        async def run_agent(payload: dict) -> AgentRun:
+            return await self._run_agent(agent, payload["input"], payload.get("context", []))
+
+        return RunnableLambda(run_agent)
+
+    def _build_langgraph_workflow(
+        self,
+        *,
+        team: Team,
+        workflow_id: str,
+        message: QueueMessage,
+        agents: list[Agent],
+        node_by_id: dict[str, Any],
+        agent_by_id: dict[str, Agent],
+        predecessors: dict[str, list[str]],
+        edge_pairs: list[tuple[str, str]],
+        entrypoint: str,
+    ):
+        try:
+            from langgraph.graph import END, StateGraph
+        except ImportError as exc:
+            raise RuntimeError("LangGraph is required to execute team workflows") from exc
+
+        graph = StateGraph(WorkflowState)
+        for node_id, node in node_by_id.items():
+            agent = agent_by_id.get(node.agent_id)
+            if agent is None:
+                raise ValueError(f"Workflow node '{node.id}' references unavailable agent '{node.agent_id}'")
+            runnable = self._langchain_runnable_for_agent(agent)
+
+            async def run_node(state: WorkflowState, *, node=node, agent=agent, runnable=runnable) -> dict:
+                input_text = self._workflow_node_input(
+                    team,
+                    workflow_id,
+                    state["original_request"],
+                    node,
+                    predecessors[node.id],
+                    state["outputs"],
+                )
+                context = [state["outputs"][source] for source in predecessors[node.id] if source in state["outputs"]]
+                self.queue.insert_agent_message(agent.id, "user", input_text, str(message.id), sender=f"workflow:{workflow_id}")
+                run = await runnable.ainvoke({"input": input_text, "context": context})
+                self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
+                await self._handle_team_tags(team, run, message, agents, enqueue_mentions=team.max_rounds <= 1)
+                return {
+                    "outputs": {node.id: run.output},
+                    "runs_by_node": {node.id: run},
+                    "run_order": [node.id],
+                }
+
+            graph.add_node(node_id, run_node)
+
+        graph.set_entry_point(entrypoint)
+        edge_sources = {source for source, _target in edge_pairs}
+        for source, target in edge_pairs:
+            graph.add_edge(source, target)
+        terminal_nodes = [node_id for node_id in node_by_id if node_id not in edge_sources]
+        for node_id in terminal_nodes:
+            graph.add_edge(node_id, END)
+        compiled = graph.compile()
+        self.events.emit("team.workflow.runtime", {"runtime": "langgraph"})
+        return compiled
 
     async def _run_iterative_rounds(
         self,
@@ -443,6 +601,14 @@ class Orchestrator:
     @staticmethod
     def _agent_lookup(agents: list[Agent]) -> dict[str, str]:
         return {agent.id.lower(): agent.id for agent in agents}
+
+    @staticmethod
+    def _extract_tags(text: str, prefix: str) -> list[tuple[str, str]]:
+        return extract_tags(text, prefix)
+
+    @staticmethod
+    def _strip_tags(text: str, prefix: str) -> str:
+        return strip_tags(text, prefix)
 
     async def _run_agent(self, agent: Agent, input_text: str, context: list[str]) -> AgentRun:
         if not agent.enabled:

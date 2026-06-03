@@ -8,6 +8,7 @@ from pocketStudio.models.task import TaskCreate, Task, TaskCommentCreate, TaskCo
 from pocketStudio.models.project import ProjectCreate, Project
 from pocketStudio.models.schedule import ScheduleCreate, Schedule
 from pocketStudio.models.event import Event
+from pocketStudio.models.workflow import TeamWorkflow, TeamWorkflowCreate, TeamWorkflowUpdate, WorkflowDefinition
 
 __all__ = [
     "TeamMode",
@@ -34,4 +35,8 @@ __all__ = [
     "ScheduleCreate",
     "Schedule",
     "Event",
+    "WorkflowDefinition",
+    "TeamWorkflow",
+    "TeamWorkflowCreate",
+    "TeamWorkflowUpdate",
 ]

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
-from pocketStudio.models import ChatMessageCreate, AgentCreate, AgentRun, MessageCreate, MessageStatus, ProjectCreate, TeamCreate, TeamMode
+from pocketStudio.models import ChatMessageCreate, AgentCreate, AgentRun, MessageCreate, MessageStatus, ProjectCreate, TeamCreate, TeamMode, TeamWorkflowCreate
 from pocketStudio.providers.base import AgentProvider, ProviderRequest, ProviderResponse
 from pocketStudio.providers.registry import ProviderRegistry
 from pocketStudio.services.agent_service import AgentService
@@ -17,6 +17,7 @@ from pocketStudio.services.project_service import ProjectService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
 from pocketStudio.services.team_routing import convert_tags_to_readable, extract_bracket_tags, strip_bracket_tags
+from pocketStudio.services.workflow_service import WorkflowService
 
 
 def temp_home() -> Path:
@@ -73,6 +74,17 @@ class TeamRelayProvider(AgentProvider):
         if request.agent.id == "lead":
             return ProviderResponse(text="Leader plan [@coder: implement API] [@reviewer: review design]")
         return ProviderResponse(text=f"{request.agent.id} result from:\n{request.input}")
+
+
+class WorkflowRecordingProvider(AgentProvider):
+    name = "workflow-recording"
+
+    def __init__(self) -> None:
+        self.inputs: list[tuple[str, str]] = []
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        self.inputs.append((request.agent.id, request.input))
+        return ProviderResponse(text=f"{request.agent.id} handled:\n{request.input}")
 
 
 def test_chain_team_processes_agents_in_order() -> None:
@@ -598,6 +610,61 @@ def test_fanout_team_runs_all_agents() -> None:
         assert {run.agent_id for run in result.runs} == {"writer", "reviewer"}
         assert "## writer" in result.output
         assert "## reviewer" in result.output
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_active_team_workflow_controls_agent_order_and_inputs() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        teams = TeamService(db)
+        workflows = WorkflowService(db, teams)
+        registry = ProviderRegistry()
+        provider = WorkflowRecordingProvider()
+        registry.register(provider)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=teams,
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            workflows=workflows,
+        )
+        orchestrator.agents.create(AgentCreate(id="planner", name="Planner", role="Plans", provider="workflow-recording"))
+        orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes", provider="workflow-recording"))
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.chain, agent_ids=["planner", "coder"]))
+        workflows.create(
+            "dev",
+            TeamWorkflowCreate(
+                id="delivery",
+                name="Delivery",
+                definition={
+                    "entrypoint": "plan",
+                    "outputNode": "build",
+                    "nodes": [
+                        {"id": "plan", "agentId": "planner", "prompt": "Create a short plan"},
+                        {"id": "build", "agentId": "coder", "inputTemplate": "{message}\n\nUpstream:\n{predecessor_outputs}"},
+                    ],
+                    "edges": [{"source": "plan", "target": "build"}],
+                },
+            ),
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Ship workflow API"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+
+        assert [run.agent_id for run in result.runs] == ["planner", "coder"]
+        assert result.output == result.runs[-1].output
+        assert "Create a short plan" in provider.inputs[0][1]
+        assert "planner handled" in provider.inputs[1][1]
+        assert orchestrator.chat.list("dev")[0].message == result.output
+        runtime_events = [event for event in orchestrator.events.list(limit=20) if event.type == "team.workflow.runtime"]
+        assert runtime_events[-1].payload["runtime"] == "langgraph"
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
