@@ -385,6 +385,7 @@ Class, data model, service object, or exception type.
 | `initialize(self)` | Helper method for its service or type. |
 | `_migrate(self, conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `_add_column(conn: sqlite3.Connection, table: str, column: str, definition: str)` | Creates a resource, installs content, or adds a relationship. |
+| `_migrate_team_mode_check(conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `_backfill_task_numbers(conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `execute(self, query: str, params: Iterable[Any]=())` | Helper method for its service or type. |
 | `fetch_one(self, query: str, params: Iterable[Any]=())` | Helper method for its service or type. |
@@ -595,11 +596,28 @@ Class, data model, service object, or exception type.
 
 Project module.
 
+#### `WorkflowRoutingFunction(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+| Method | Usage |
+|---|---|
+| `code_must_not_be_empty(cls, value: str)` | Helper method for its service or type. |
+| `entrypoint_must_not_be_empty(cls, value: str)` | Helper method for its service or type. |
+
 #### `WorkflowNode(BaseModel)`
 
 Class, data model, service object, or exception type.
 
 #### `WorkflowEdge(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `WorkflowRoute(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `WorkflowConditionalEdge(BaseModel)`
 
 Class, data model, service object, or exception type.
 
@@ -980,7 +998,9 @@ Class, data model, service object, or exception type.
 | `async _run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_workflow_node_input(team: Team, workflow_id: str, original_request: str, node, predecessor_ids: list[str], outputs: dict[str, str])` | Helper method for its service or type. |
 | `_langchain_runnable_for_agent(self, agent: Agent)` | Helper method for its service or type. |
-| `_build_langgraph_workflow(self, *, team: Team, workflow_id: str, message: QueueMessage, agents: list[Agent], node_by_id: dict[str, Any], agent_by_id: dict[str, Agent], predecessors: dict[str, list[str]], edge_pairs: list[tuple[str, str]], entrypoint: str)` | Helper method for its service or type. |
+| `_build_langgraph_workflow(self, *, team: Team, workflow_id: str, message: QueueMessage, agents: list[Agent], node_by_id: dict[str, Any], agent_by_id: dict[str, Agent], predecessors: dict[str, list[str]], outgoing: dict[str, list[str]], edge_pairs: list[tuple[str, str]], conditional_edges: list[Any], entrypoint: str)` | Helper method for its service or type. |
+| `_compile_workflow_routing_function(node)` | Helper method for its service or type. |
+| `_route_from_output(output: str, conditions: list[str])` | Helper method for its service or type. |
 | `async _run_iterative_rounds(self, team: Team, message: QueueMessage, agents: list[Agent], seed_runs: list[AgentRun], max_rounds: int)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent])` | Helper method for its service or type. |
 | `_member_chain_input(self, team: Team, original_request: str, leader_run: AgentRun, previous_member_runs: list[AgentRun], member_id: str)` | Helper method for its service or type. |
@@ -1334,6 +1354,8 @@ Class, data model, service object, or exception type.
 | `validate(self, team_id: str, definition: WorkflowDefinition)` | Validates input or repairs required runtime state. |
 | `_payload_from_import_json(payload: dict[str, Any])` | Builds API or compatibility-layer response/request payloads. |
 | `_validate_definition_for_team(self, team_id: str, definition: WorkflowDefinition)` | Validates input or repairs required runtime state. |
+| `graph_io(definition: WorkflowDefinition)` | Helper method for its service or type. |
+| `terminal_nodes(definition: WorkflowDefinition)` | Helper method for its service or type. |
 | `_topological_order(definition: WorkflowDefinition)` | Helper method for its service or type. |
 | `_disable_other_workflows(self, team_id: str, workflow_id: str)` | Helper method for its service or type. |
 | `_to_workflow(row)` | Converts, parses, or formats internal data. |

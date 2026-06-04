@@ -77,6 +77,65 @@ def test_workflow_service_rejects_agents_outside_team() -> None:
         shutil.rmtree(home, ignore_errors=True)
 
 
+def test_workflow_service_rejects_invalid_conditional_target() -> None:
+    home = temp_home()
+    try:
+        agents, teams, workflows = build_services(home)
+        agents.create(AgentCreate(id="planner", name="Planner", role="Plans"))
+        teams.create(TeamCreate(id="dev", name="Dev", agent_ids=["planner"]))
+
+        with pytest.raises(ValueError, match="route target"):
+            workflows.create(
+                "dev",
+                TeamWorkflowCreate(
+                    id="bad-route",
+                    name="Bad Route",
+                    definition={
+                        "entrypoint": "plan",
+                        "nodes": [{"id": "plan", "agentId": "planner"}],
+                        "conditionalEdges": [
+                            {"source": "plan", "routes": [{"condition": "approved", "target": "missing"}]}
+                        ],
+                    },
+                ),
+            )
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_workflow_service_rejects_routing_function_without_conditional_source() -> None:
+    home = temp_home()
+    try:
+        agents, teams, workflows = build_services(home)
+        agents.create(AgentCreate(id="planner", name="Planner", role="Plans"))
+        teams.create(TeamCreate(id="dev", name="Dev", agent_ids=["planner"]))
+
+        with pytest.raises(ValueError, match="routingFunction"):
+            workflows.create(
+                "dev",
+                TeamWorkflowCreate(
+                    id="bad-routing-function",
+                    name="Bad Routing Function",
+                    definition={
+                        "entrypoint": "plan",
+                        "nodes": [
+                            {
+                                "id": "plan",
+                                "agentId": "planner",
+                                "routingFunction": {
+                                    "language": "python",
+                                    "entrypoint": "route",
+                                    "code": "def route(state):\n    return 'done'",
+                                },
+                            }
+                        ],
+                    },
+                ),
+            )
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def test_workflow_service_exports_and_imports_portable_json() -> None:
     home = temp_home()
     try:

@@ -80,6 +80,9 @@ function extractWorkflowDefinition(value: unknown): WorkflowDefinition {
     outputNode: candidate.outputNode || "",
     nodes: candidate.nodes as WorkflowDefinition["nodes"],
     edges: Array.isArray(candidate.edges) ? candidate.edges as WorkflowDefinition["edges"] : [],
+    conditionalEdges: Array.isArray(candidate.conditionalEdges)
+      ? candidate.conditionalEdges as WorkflowDefinition["conditionalEdges"]
+      : [],
     metadata: candidate.metadata || {},
   };
 }
@@ -213,7 +216,7 @@ export default function TeamsPage() {
       name: team.name,
       agents: [...team.agents],
       leader_agent: team.leader_agent,
-      useWorkflow: false,
+      useWorkflow: team.mode === "workflow",
       workflowId: "",
       workflowName: "",
       workflowJson: "",
@@ -267,7 +270,9 @@ export default function TeamsPage() {
         setError((err as Error).message);
         return;
       }
-      const workflowAgentIds = workflowDefinition.nodes.map((node) => node.agentId);
+      const workflowAgentIds = workflowDefinition.nodes
+        .filter((node) => (node.type || "agent") === "agent")
+        .map((node) => node.agentId || "");
       const missingAgentIds = workflowAgentIds.filter((agentId) => !teamAgents.includes(agentId));
       if (missingAgentIds.length > 0) {
         setError(`Workflow references agents outside this team: ${missingAgentIds.join(", ")}`);
@@ -277,7 +282,12 @@ export default function TeamsPage() {
     setSaving(true);
     setError("");
     try {
-      await saveTeam(teamId, { name, agents: teamAgents, leader_agent });
+      await saveTeam(teamId, {
+        name,
+        agents: teamAgents,
+        leader_agent,
+        mode: editing.useWorkflow ? "workflow" : "chain",
+      });
       if (editing.useWorkflow && workflowDefinition) {
         await validateTeamWorkflow(teamId, workflowDefinition);
         await saveTeamWorkflow(teamId, editing.workflowId || `${teamId}-workflow`, {
@@ -589,6 +599,9 @@ function TeamEditor({
           onWorkflowIdChange={(workflowId) => setForm({ ...form, workflowId })}
           onWorkflowNameChange={(workflowName) => setForm({ ...form, workflowName })}
           onDefinitionJsonChange={(workflowJson) => setForm({ ...form, workflowJson })}
+          onValidateDefinition={async (definition) => {
+            await validateTeamWorkflow(form.id.toLowerCase(), definition);
+          }}
         />
 
         {error && (

@@ -87,6 +87,20 @@ class WorkflowRecordingProvider(AgentProvider):
         return ProviderResponse(text=f"{request.agent.id} handled:\n{request.input}")
 
 
+class ConditionalWorkflowProvider(AgentProvider):
+    name = "conditional-workflow"
+
+    def __init__(self, review_output: str) -> None:
+        self.review_output = review_output
+        self.agent_ids: list[str] = []
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        self.agent_ids.append(request.agent.id)
+        if request.agent.id == "reviewer":
+            return ProviderResponse(text=self.review_output)
+        return ProviderResponse(text=f"{request.agent.id} done")
+
+
 def test_chain_team_processes_agents_in_order() -> None:
     home = temp_home()
     try:
@@ -637,7 +651,7 @@ def test_active_team_workflow_controls_agent_order_and_inputs() -> None:
         )
         orchestrator.agents.create(AgentCreate(id="planner", name="Planner", role="Plans", provider="workflow-recording"))
         orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes", provider="workflow-recording"))
-        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.chain, agent_ids=["planner", "coder"]))
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.workflow, agent_ids=["planner", "coder"]))
         workflows.create(
             "dev",
             TeamWorkflowCreate(
@@ -665,6 +679,320 @@ def test_active_team_workflow_controls_agent_order_and_inputs() -> None:
         assert orchestrator.chat.list("dev")[0].message == result.output
         runtime_events = [event for event in orchestrator.events.list(limit=20) if event.type == "team.workflow.runtime"]
         assert runtime_events[-1].payload["runtime"] == "langgraph"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_active_team_workflow_is_ignored_unless_team_mode_is_workflow() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        teams = TeamService(db)
+        workflows = WorkflowService(db, teams)
+        registry = ProviderRegistry()
+        provider = WorkflowRecordingProvider()
+        registry.register(provider)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=teams,
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            workflows=workflows,
+        )
+        orchestrator.agents.create(AgentCreate(id="planner", name="Planner", role="Plans", provider="workflow-recording"))
+        orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes", provider="workflow-recording"))
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.chain, agent_ids=["planner", "coder"]))
+        workflows.create(
+            "dev",
+            TeamWorkflowCreate(
+                id="delivery",
+                name="Delivery",
+                definition={
+                    "entrypoint": "build",
+                    "outputNode": "build",
+                    "nodes": [{"id": "build", "agentId": "coder"}],
+                },
+            ),
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Ship workflow API"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+        runtime_events = [event for event in orchestrator.events.list(limit=20) if event.type == "team.workflow.runtime"]
+
+        assert [run.agent_id for run in result.runs] == ["planner", "coder", "planner"]
+        assert runtime_events == []
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_team_workflow_conditional_edges_route_from_json_output() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        teams = TeamService(db)
+        workflows = WorkflowService(db, teams)
+        registry = ProviderRegistry()
+        provider = ConditionalWorkflowProvider('{"route":"approved"}')
+        registry.register(provider)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=teams,
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            workflows=workflows,
+        )
+        for agent_id in ["planner", "reviewer", "coder", "reviser"]:
+            orchestrator.agents.create(
+                AgentCreate(id=agent_id, name=agent_id.title(), role="Works", provider="conditional-workflow")
+            )
+        orchestrator.teams.create(
+            TeamCreate(
+                id="dev",
+                name="Dev",
+                mode=TeamMode.workflow,
+                agent_ids=["planner", "reviewer", "coder", "reviser"],
+            )
+        )
+        workflows.create(
+            "dev",
+            TeamWorkflowCreate(
+                id="conditional",
+                name="Conditional",
+                definition={
+                    "entrypoint": "plan",
+                    "outputNode": "build",
+                    "nodes": [
+                        {"id": "plan", "agentId": "planner"},
+                        {"id": "review", "agentId": "reviewer"},
+                        {"id": "build", "agentId": "coder"},
+                        {"id": "revise", "agentId": "reviser"},
+                    ],
+                    "edges": [{"source": "plan", "target": "review"}],
+                    "conditionalEdges": [
+                        {
+                            "source": "review",
+                            "routes": [
+                                {"condition": "approved", "target": "build"},
+                                {"condition": "needs_revision", "target": "revise"},
+                            ],
+                            "defaultTarget": "revise",
+                        }
+                    ],
+                },
+            ),
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Ship it"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+        route_events = [event for event in events.list(limit=20) if event.type == "team.workflow.route"]
+
+        assert provider.agent_ids == ["planner", "reviewer", "coder"]
+        assert [run.agent_id for run in result.runs] == ["planner", "reviewer", "coder"]
+        assert result.output == "coder done"
+        assert route_events[-1].payload["route"] == "approved"
+        assert route_events[-1].payload["target"] == "build"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_team_workflow_conditional_edges_fall_back_to_default_target() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        teams = TeamService(db)
+        workflows = WorkflowService(db, teams)
+        registry = ProviderRegistry()
+        provider = ConditionalWorkflowProvider("unclear")
+        registry.register(provider)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=teams,
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            workflows=workflows,
+        )
+        for agent_id in ["reviewer", "coder", "reviser"]:
+            orchestrator.agents.create(
+                AgentCreate(id=agent_id, name=agent_id.title(), role="Works", provider="conditional-workflow")
+            )
+        orchestrator.teams.create(
+            TeamCreate(id="dev", name="Dev", mode=TeamMode.workflow, agent_ids=["reviewer", "coder", "reviser"])
+        )
+        workflows.create(
+            "dev",
+            TeamWorkflowCreate(
+                id="conditional",
+                name="Conditional",
+                definition={
+                    "entrypoint": "review",
+                    "nodes": [
+                        {"id": "review", "agentId": "reviewer"},
+                        {"id": "build", "agentId": "coder"},
+                        {"id": "revise", "agentId": "reviser"},
+                    ],
+                    "conditionalEdges": [
+                        {
+                            "source": "review",
+                            "routes": [{"condition": "approved", "target": "build"}],
+                            "defaultTarget": "revise",
+                        }
+                    ],
+                },
+            ),
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Ship it"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+        route_events = [event for event in events.list(limit=20) if event.type == "team.workflow.route"]
+
+        assert provider.agent_ids == ["reviewer", "reviser"]
+        assert result.output == "reviser done"
+        assert route_events[-1].payload["route"] == "__default__"
+        assert route_events[-1].payload["target"] == "revise"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_team_workflow_uses_python_routing_function_for_conditional_edges() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        teams = TeamService(db)
+        workflows = WorkflowService(db, teams)
+        registry = ProviderRegistry()
+        provider = ConditionalWorkflowProvider("route should come from python")
+        registry.register(provider)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=teams,
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            workflows=workflows,
+        )
+        for agent_id in ["reviewer", "coder", "reviser"]:
+            orchestrator.agents.create(
+                AgentCreate(id=agent_id, name=agent_id.title(), role="Works", provider="conditional-workflow")
+            )
+        orchestrator.teams.create(
+            TeamCreate(id="dev", name="Dev", mode=TeamMode.workflow, agent_ids=["reviewer", "coder", "reviser"])
+        )
+        workflows.create(
+            "dev",
+            TeamWorkflowCreate(
+                id="python-routing",
+                name="Python Routing",
+                definition={
+                    "entrypoint": "review",
+                    "nodes": [
+                        {
+                            "id": "review",
+                            "agentId": "reviewer",
+                            "routingFunction": {
+                                "language": "python",
+                                "entrypoint": "route",
+                                "code": (
+                                    "def route(state):\n"
+                                    "    output = state.get('outputs', {}).get('review', '')\n"
+                                    "    if 'python' in output:\n"
+                                    "        return 'needs_revision'\n"
+                                    "    return 'approved'\n"
+                                ),
+                            },
+                        },
+                        {"id": "build", "agentId": "coder"},
+                        {"id": "revise", "agentId": "reviser"},
+                    ],
+                    "conditionalEdges": [
+                        {
+                            "source": "review",
+                            "routes": [
+                                {"condition": "approved", "target": "build"},
+                                {"condition": "needs_revision", "target": "revise"},
+                            ],
+                        }
+                    ],
+                },
+            ),
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Ship it"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+        route_events = [event for event in events.list(limit=20) if event.type == "team.workflow.route"]
+
+        assert provider.agent_ids == ["reviewer", "reviser"]
+        assert result.output == "reviser done"
+        assert route_events[-1].payload["route"] == "needs_revision"
+        assert route_events[-1].payload["target"] == "revise"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_team_workflow_runs_start_tool_and_end_nodes() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        teams = TeamService(db)
+        workflows = WorkflowService(db, teams)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=teams,
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=ProviderRegistry(),
+            workflows=workflows,
+        )
+        orchestrator.agents.create(AgentCreate(id="planner", name="Planner", role="Plans"))
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.workflow, agent_ids=["planner"]))
+        workflows.create(
+            "dev",
+            TeamWorkflowCreate(
+                id="control-nodes",
+                name="Control Nodes",
+                definition={
+                    "entrypoint": "start",
+                    "outputNode": "end",
+                    "nodes": [
+                        {"id": "start", "type": "start"},
+                        {"id": "tool", "type": "tool", "prompt": "tool result"},
+                        {"id": "end", "type": "end"},
+                    ],
+                    "edges": [
+                        {"source": "start", "target": "tool"},
+                        {"source": "tool", "target": "end"},
+                    ],
+                },
+            ),
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Input"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+
+        assert [run.agent_id for run in result.runs] == ["start", "tool", "end"]
+        assert result.output == "tool result"
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

@@ -78,14 +78,16 @@ export interface TeamConfig {
   name: string;
   agents: string[];
   leader_agent: string;
+  mode?: "chain" | "fanout" | "workflow";
 }
 
 export interface WorkflowNode {
   id: string;
-  agentId: string;
+  agentId?: string;
   prompt?: string;
   inputTemplate?: string;
   type?: string;
+  routingFunction?: WorkflowRoutingFunction;
   [key: string]: unknown;
 }
 
@@ -96,12 +98,29 @@ export interface WorkflowEdge {
   [key: string]: unknown;
 }
 
+export interface WorkflowRoute {
+  condition: string;
+  target: string;
+}
+
+export interface WorkflowRoutingFunction {
+  language: "python";
+  code: string;
+  entrypoint: string;
+}
+
+export interface WorkflowConditionalEdge {
+  source: string;
+  routes: WorkflowRoute[];
+}
+
 export interface WorkflowDefinition {
   version?: number;
   entrypoint: string;
   outputNode?: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
+  conditionalEdges?: WorkflowConditionalEdge[];
   metadata?: Record<string, unknown>;
 }
 
@@ -291,7 +310,7 @@ export async function saveTeam(
     body: JSON.stringify({
       id,
       name: team.name,
-      mode: "chain",
+      mode: team.mode || "chain",
       agent_ids: team.agents,
       leaderAgent: team.leader_agent || "",
     }),

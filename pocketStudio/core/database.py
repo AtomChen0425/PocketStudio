@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE TABLE IF NOT EXISTS teams (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    mode TEXT NOT NULL CHECK (mode IN ('chain', 'fanout')),
+    mode TEXT NOT NULL CHECK (mode IN ('chain', 'fanout', 'workflow')),
     agent_ids TEXT NOT NULL,
     leader_agent TEXT NOT NULL DEFAULT '',
     max_rounds INTEGER NOT NULL DEFAULT 1,
@@ -251,6 +251,7 @@ class Database:
         self._add_column(conn, "teams", "leader_agent", "TEXT NOT NULL DEFAULT ''")
         self._add_column(conn, "teams", "max_rounds", "INTEGER NOT NULL DEFAULT 1")
         self._add_column(conn, "teams", "stop_when_idle", "INTEGER NOT NULL DEFAULT 1")
+        self._migrate_team_mode_check(conn)
         self._backfill_task_numbers(conn)
 
     @staticmethod
@@ -258,6 +259,41 @@ class Database:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _migrate_team_mode_check(conn: sqlite3.Connection) -> None:
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'teams'").fetchone()
+        create_sql = row["sql"] if row else ""
+        if "'workflow'" in create_sql:
+            return
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            """
+            CREATE TABLE teams_new (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mode TEXT NOT NULL CHECK (mode IN ('chain', 'fanout', 'workflow')),
+                agent_ids TEXT NOT NULL,
+                leader_agent TEXT NOT NULL DEFAULT '',
+                max_rounds INTEGER NOT NULL DEFAULT 1,
+                stop_when_idle INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO teams_new (
+                id, name, mode, agent_ids, leader_agent, max_rounds, stop_when_idle, created_at, updated_at
+            )
+            SELECT id, name, mode, agent_ids, leader_agent, max_rounds, stop_when_idle, created_at, updated_at
+            FROM teams
+            """
+        )
+        conn.execute("DROP TABLE teams")
+        conn.execute("ALTER TABLE teams_new RENAME TO teams")
+        conn.execute("PRAGMA foreign_keys = ON")
 
     @staticmethod
     def _backfill_task_numbers(conn: sqlite3.Connection) -> None:

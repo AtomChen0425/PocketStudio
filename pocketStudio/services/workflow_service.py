@@ -148,19 +148,59 @@ class WorkflowService:
     def _validate_definition_for_team(self, team_id: str, definition: WorkflowDefinition) -> list[str]:
         team = self.teams.get(team_id)
         team_agents = set(team.agent_ids)
-        missing_agents = sorted({node.agent_id for node in definition.nodes if node.agent_id not in team_agents})
+        missing_agents = sorted(
+            [node.agent_id for node in definition.nodes if node.type == "agent" and node.agent_id not in team_agents]
+        )
         if missing_agents:
-            raise ValueError(f"Workflow references agents outside team '{team_id}': {', '.join(missing_agents)}")
+            raise ValueError(f"Workflow references agents outside team'{team_id}': {', '.join(missing_agents)}")
+        normal_sources = {edge.source for edge in definition.edges}
+        conditional_sources = {edge.source for edge in definition.conditional_edges}
+        overlapping_sources = sorted(normal_sources & conditional_sources)
+        if overlapping_sources:
+            raise ValueError(
+                "Workflow nodes cannot mix normal and conditional outgoing edges: "
+                + ", ".join(overlapping_sources)
+            )
+        conditional_sources = {edge.source for edge in definition.conditional_edges}
+        routing_function_sources = sorted(
+            node.id for node in definition.nodes if node.routing_function is not None and node.id not in conditional_sources
+        )
+        if routing_function_sources:
+            raise ValueError(
+                "Workflow routingFunction can only be set on conditional source nodes: "
+                + ", ".join(routing_function_sources)
+            )
         return self._topological_order(definition)
+
+    @staticmethod
+    def graph_io(definition: WorkflowDefinition) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        node_ids = {node.id for node in definition.nodes}
+        outgoing: dict[str, list[str]] = defaultdict(list)
+        predecessors: dict[str, list[str]] = defaultdict(list)
+        for node_id in node_ids:
+            outgoing[node_id] = []
+            predecessors[node_id] = []
+        for edge in definition.edges:
+            outgoing[edge.source].append(edge.target)
+            predecessors[edge.target].append(edge.source)
+        for conditional_edge in definition.conditional_edges:
+            targets = [route.target for route in conditional_edge.routes]
+            if conditional_edge.default_target:
+                targets.append(conditional_edge.default_target)
+            for target in sorted(set(targets)):
+                outgoing[conditional_edge.source].append(target)
+                predecessors[target].append(conditional_edge.source)
+        return dict(outgoing), dict(predecessors)
+
+    @staticmethod
+    def terminal_nodes(definition: WorkflowDefinition) -> list[str]:
+        outgoing, _predecessors = WorkflowService.graph_io(definition)
+        return [node.id for node in definition.nodes if not outgoing.get(node.id)]
 
     @staticmethod
     def _topological_order(definition: WorkflowDefinition) -> list[str]:
         node_ids = {node.id for node in definition.nodes}
-        outgoing: dict[str, list[str]] = defaultdict(list)
-        incoming_count = {node_id: 0 for node_id in node_ids}
-        for edge in definition.edges:
-            outgoing[edge.source].append(edge.target)
-            incoming_count[edge.target] += 1
+        outgoing, _predecessors = WorkflowService.graph_io(definition)
 
         queue = deque([definition.entrypoint])
         visited: list[str] = []
@@ -169,18 +209,14 @@ class WorkflowService:
             node_id = queue.popleft()
             if node_id in seen:
                 continue
-            if incoming_count[node_id] > 0 and node_id != definition.entrypoint:
-                continue
             seen.add(node_id)
             visited.append(node_id)
             for target in outgoing[node_id]:
-                incoming_count[target] -= 1
-                if incoming_count[target] == 0:
-                    queue.append(target)
+                queue.append(target)
 
         if set(visited) != node_ids:
             unreachable = sorted(node_ids - set(visited))
-            raise ValueError(f"Workflow graph must be reachable from entrypoint and acyclic: {', '.join(unreachable)}")
+            raise ValueError(f"Workflow graph must be reachable from entrypoint: {', '.join(unreachable)}")
         return visited
 
     def _disable_other_workflows(self, team_id: str, workflow_id: str) -> None:
