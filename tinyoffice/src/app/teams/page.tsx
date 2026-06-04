@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { usePolling } from "@/lib/hooks";
 import {
@@ -22,14 +22,13 @@ import "@xyflow/react/dist/style.css";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   Users, Crown, Bot, Plus, Pencil, Trash2,
-  X, Check, Loader2, FileJson, Upload, Wand2,
+  X, Check, Loader2,
 } from "lucide-react";
 import { agentColor } from "@/components/sidebar";
+import { WorkflowEditor } from "@/components/team/workflow-editor";
 import { cn } from "@/lib/utils";
 
 type FormData = {
@@ -55,23 +54,6 @@ const emptyForm: FormData = {
   workflowJson: "",
   originalWorkflowId: "",
 };
-
-function defaultWorkflowDefinition(leaderAgent: string): WorkflowDefinition {
-  return {
-    version: 1,
-    entrypoint: "start",
-    outputNode: "start",
-    nodes: [
-      {
-        id: "start",
-        agentId: leaderAgent,
-        prompt: "Handle the team request.",
-      },
-    ],
-    edges: [],
-    metadata: { name: "Default Workflow" },
-  };
-}
 
 function prettyJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
@@ -100,28 +82,6 @@ function extractWorkflowDefinition(value: unknown): WorkflowDefinition {
     edges: Array.isArray(candidate.edges) ? candidate.edges as WorkflowDefinition["edges"] : [],
     metadata: candidate.metadata || {},
   };
-}
-
-function workflowNameFromJson(value: unknown, fallback: string): string {
-  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const workflow = record.workflow && typeof record.workflow === "object"
-    ? record.workflow as Record<string, unknown>
-    : record;
-  const metadata = workflow.metadata && typeof workflow.metadata === "object"
-    ? workflow.metadata as Record<string, unknown>
-    : {};
-  return String(workflow.name || metadata.name || fallback);
-}
-
-function workflowIdFromJson(value: unknown, fallback: string): string {
-  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const workflow = record.workflow && typeof record.workflow === "object"
-    ? record.workflow as Record<string, unknown>
-    : record;
-  const metadata = workflow.metadata && typeof workflow.metadata === "object"
-    ? workflow.metadata as Record<string, unknown>
-    : {};
-  return String(workflow.id || metadata.id || fallback);
 }
 
 // ── Mini ReactFlow node types for team cards ──────────────────────────────
@@ -471,9 +431,6 @@ function TeamEditor({
   availableAgents: Record<string, AgentConfig>;
 }) {
   const agentIds = Object.keys(availableAgents);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [workflowStatus, setWorkflowStatus] = useState("");
-  const [workflowChecking, setWorkflowChecking] = useState(false);
 
   const toggleAgent = (agentId: string) => {
     const inTeam = form.agents.includes(agentId);
@@ -496,105 +453,6 @@ function TeamEditor({
   const setLeader = (agentId: string) => {
     setForm({ ...form, leader_agent: agentId });
   };
-
-  const enableWorkflow = (enabled: boolean) => {
-    if (!enabled) {
-      setWorkflowStatus("");
-      setForm({ ...form, useWorkflow: false });
-      return;
-    }
-    const definition = form.workflowJson
-      ? form.workflowJson
-      : prettyJson(defaultWorkflowDefinition(form.leader_agent || form.agents[0] || ""));
-    setForm({
-      ...form,
-      useWorkflow: true,
-      workflowId: form.workflowId || `${form.id || "team"}-workflow`,
-      workflowName: form.workflowName || "Team Workflow",
-      workflowJson: definition,
-    });
-  };
-
-  const formatWorkflowJson = () => {
-    try {
-      const parsed = JSON.parse(form.workflowJson);
-      setForm({
-        ...form,
-        workflowId: form.workflowId || workflowIdFromJson(parsed, `${form.id || "team"}-workflow`),
-        workflowName: form.workflowName || workflowNameFromJson(parsed, "Team Workflow"),
-        workflowJson: prettyJson(extractWorkflowDefinition(parsed)),
-      });
-      setWorkflowStatus("Workflow JSON formatted");
-    } catch (err) {
-      setWorkflowStatus((err as Error).message);
-    }
-  };
-
-  const validateWorkflowJson = async () => {
-    setWorkflowChecking(true);
-    try {
-      const definition = extractWorkflowDefinition(JSON.parse(form.workflowJson));
-      const missingAgentIds = definition.nodes
-        .map((node) => node.agentId)
-        .filter((agentId) => !form.agents.includes(agentId));
-      if (missingAgentIds.length > 0) {
-        throw new Error(`Workflow references agents outside this team: ${missingAgentIds.join(", ")}`);
-      }
-      const nodeIds = new Set(definition.nodes.map((node) => node.id));
-      for (const edge of definition.edges) {
-        if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
-          throw new Error("Workflow edges must reference existing nodes");
-        }
-      }
-      if (!nodeIds.has(definition.entrypoint)) {
-        throw new Error("Workflow entrypoint must match a node id");
-      }
-      if (definition.outputNode && !nodeIds.has(definition.outputNode)) {
-        throw new Error("Workflow outputNode must match a node id");
-      }
-      setWorkflowStatus(`Workflow JSON is valid: ${definition.nodes.length} nodes, ${definition.edges.length} edges`);
-    } catch (err) {
-      setWorkflowStatus((err as Error).message);
-    } finally {
-      setWorkflowChecking(false);
-    }
-  };
-
-  const importWorkflowFile = async (file: File | undefined) => {
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      const definition = extractWorkflowDefinition(parsed);
-      setForm({
-        ...form,
-        useWorkflow: true,
-        workflowId: workflowIdFromJson(parsed, form.workflowId || `${form.id || "team"}-workflow`),
-        workflowName: workflowNameFromJson(parsed, form.workflowName || "Team Workflow"),
-        workflowJson: prettyJson(definition),
-      });
-      setWorkflowStatus(`Imported ${file.name}`);
-    } catch (err) {
-      setWorkflowStatus((err as Error).message);
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  const workflowSummary = useMemo(() => {
-    if (!form.useWorkflow || !form.workflowJson) return null;
-    try {
-      const definition = extractWorkflowDefinition(JSON.parse(form.workflowJson));
-      const workflowAgents = Array.from(new Set(definition.nodes.map((node) => node.agentId)));
-      return {
-        nodes: definition.nodes.length,
-        edges: definition.edges.length,
-        agents: workflowAgents,
-      };
-    } catch {
-      return null;
-    }
-  }, [form.useWorkflow, form.workflowJson]);
 
   return (
     <Card className="border-primary/50">
@@ -714,103 +572,24 @@ function TeamEditor({
           </div>
         )}
 
-        <div className="space-y-3 border-t pt-4">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Workflow</label>
-            </div>
-            <Switch
-              checked={form.useWorkflow}
-              onCheckedChange={enableWorkflow}
-              disabled={form.agents.length === 0}
-            />
-          </div>
-
-          {form.useWorkflow && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Workflow ID</label>
-                  <Input
-                    value={form.workflowId}
-                    onChange={(e) => setForm({ ...form, workflowId: e.target.value })}
-                    placeholder="e.g. delivery-flow"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Workflow Name</label>
-                  <Input
-                    value={form.workflowName}
-                    onChange={(e) => setForm({ ...form, workflowName: e.target.value })}
-                    placeholder="e.g. Delivery Flow"
-                  />
-                </div>
-              </div>
-
-              {workflowSummary && (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <Badge variant="outline">{workflowSummary.nodes} nodes</Badge>
-                  <Badge variant="outline">{workflowSummary.edges} edges</Badge>
-                  {workflowSummary.agents.map((agentId) => (
-                    <Badge
-                      key={agentId}
-                      variant={form.agents.includes(agentId) ? "secondary" : "destructive"}
-                    >
-                      @{agentId}
-                    </Badge>
-                  ))}
-                </div>
-              )}
-
-              <Textarea
-                value={form.workflowJson}
-                onChange={(e) => {
-                  setForm({ ...form, workflowJson: e.target.value });
-                  setWorkflowStatus("");
-                }}
-                className="min-h-72 font-mono text-xs leading-relaxed"
-                spellCheck={false}
-              />
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/json,.json"
-                className="hidden"
-                onChange={(event) => importWorkflowFile(event.target.files?.[0])}
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Import JSON
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={formatWorkflowJson}>
-                  <Wand2 className="h-3.5 w-3.5" />
-                  Format
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={validateWorkflowJson}
-                  disabled={workflowChecking}
-                >
-                  {workflowChecking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
-                  Validate
-                </Button>
-                {workflowStatus && (
-                  <span className="text-xs text-muted-foreground">{workflowStatus}</span>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
+        <WorkflowEditor
+          enabled={form.useWorkflow}
+          workflowId={form.workflowId}
+          workflowName={form.workflowName}
+          definitionJson={form.workflowJson}
+          agents={availableAgents}
+          teamAgentIds={form.agents}
+          leaderAgentId={form.leader_agent}
+          onEnabledChange={(enabled) => setForm({
+            ...form,
+            useWorkflow: enabled,
+            workflowId: enabled ? form.workflowId || `${form.id || "team"}-workflow` : form.workflowId,
+            workflowName: enabled ? form.workflowName || "Team Workflow" : form.workflowName,
+          })}
+          onWorkflowIdChange={(workflowId) => setForm({ ...form, workflowId })}
+          onWorkflowNameChange={(workflowName) => setForm({ ...form, workflowName })}
+          onDefinitionJsonChange={(workflowJson) => setForm({ ...form, workflowJson })}
+        />
 
         {error && (
           <p className="text-sm text-destructive">{error}</p>
