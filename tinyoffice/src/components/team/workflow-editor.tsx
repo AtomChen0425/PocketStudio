@@ -93,7 +93,7 @@ function defaultRoutingFunction(source: string, routes: WorkflowRoute[] = []): W
     entrypoint: "route",
     code: [
       "def route(state):",
-      `    output = state.get("outputs", {}).get("${source}", "")`,
+      `    output = state["runs"][-1].output`,
       `    if "${firstRoute}" in output:`,
       `        return "${firstRoute}"`,
       `    return "${fallbackRoute}"`,
