@@ -61,11 +61,12 @@ export const AGENT_SESSION_RELEASE_MS = 6200;
 export const OFFICE_STATION_COUNT = 8;
 export const ARCHIVE_BUTTONS = [
   { id: "logs", label: "Logs" },
+  { id: "runtime", label: "Runtime" },
   { id: "outgoing", label: "Ongoing Dock" },
   { id: "tasks", label: "Task Board" },
   { id: "routing", label: "Live Routing" },
 ] as const satisfies ReadonlyArray<{
-  id: "logs" | "outgoing" | "tasks" | "routing";
+  id: "logs" | "runtime" | "outgoing" | "tasks" | "routing";
   label: string;
 }>;
 

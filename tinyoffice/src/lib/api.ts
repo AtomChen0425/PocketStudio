@@ -192,6 +192,29 @@ export interface EventData {
   [key: string]: unknown;
 }
 
+export interface OfficeEvent extends EventData {
+  eventId?: number;
+  messageId?: string;
+  agentId?: string;
+  provider?: string;
+  providerEventType?: string;
+  summary?: string;
+  content?: string;
+  raw?: unknown;
+  process?: unknown;
+  target?: string;
+  sender?: string;
+  channel?: string;
+  teamId?: string;
+  fromAgent?: string;
+  toAgent?: string;
+  responseId?: number | string;
+  status?: string;
+  error?: string;
+  tool?: string | null;
+  delivered?: number;
+}
+
 export interface AgentMessage {
   id: number;
   agent_id: string;
@@ -283,6 +306,15 @@ export async function getResponses(limit = 20): Promise<ResponseData[]> {
 
 export async function getLogs(limit = 100): Promise<{ lines: string[] }> {
   return apiFetch(`/api/logs?limit=${limit}`);
+}
+
+export async function getOfficeEvents(limit = 200, since = 0): Promise<OfficeEvent[]> {
+  const items = await apiFetch<Array<{ event?: string; data?: OfficeEvent }>>(
+    `/api/events/office?limit=${limit}&since=${since}`,
+  );
+  return items
+    .map((item) => item.data ?? null)
+    .filter((event): event is OfficeEvent => Boolean(event));
 }
 
 export async function saveAgent(
@@ -785,8 +817,9 @@ export function subscribeToEvents(
 
   // Listen to all known event types
   const types = eventTypes ?? [
-    "message:incoming", "agent:invoke", "agent:progress",
-    "agent:response", "agent:mention", "message:done",
+    "message:incoming", "message:processing", "message:done", "message:failed",
+    "agent:invoke", "agent:progress", "agent:response", "agent:mention",
+    "response:queued", "chat:posted", "team:chatroom",
   ];
   for (const type of types) {
     es.addEventListener(type, handler);

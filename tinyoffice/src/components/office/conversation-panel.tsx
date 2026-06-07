@@ -182,7 +182,7 @@ export function ConversationPanel({
     return conversationEntries
       .filter((entry) => {
         if (entry.role === "agent") return entry.agentId === conversationFilter;
-        return entry.targetAgents.length === 0 || entry.targetAgents.includes(conversationFilter);
+        return entry.targetAgents.includes(conversationFilter);
       })
       .slice(-60);
   }, [conversationEntries, conversationFilter, teams]);
