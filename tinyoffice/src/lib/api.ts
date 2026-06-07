@@ -203,6 +203,16 @@ export interface AgentMessage {
   created_at: number;
 }
 
+export function isInternalAgentInput(message: Pick<AgentMessage, "role" | "sender">): boolean {
+  if (message.role !== "user") return false;
+  return (
+    message.sender === "orchestrator" ||
+    message.sender.startsWith("workflow:") ||
+    message.sender.startsWith("team:") ||
+    message.sender.startsWith("chatroom:")
+  );
+}
+
 // ── API Functions ─────────────────────────────────────────────────────────
 
 export async function getAgents(): Promise<Record<string, AgentConfig>> {

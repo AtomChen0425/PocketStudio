@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/prompt-input";
 import { Markdown } from "@/components/ui/markdown";
 import { PIXEL_SCENE_LAYOUT } from "./pixel-office-scene";
-import { sendMessage, type AgentConfig, type AgentMessage, type TeamConfig } from "@/lib/api";
+import { isInternalAgentInput, sendMessage, type AgentConfig, type AgentMessage, type TeamConfig } from "@/lib/api";
 import { timeAgo } from "@/lib/hooks";
 import type { ConversationEntry, LiveBubble } from "./types";
 
@@ -92,6 +92,7 @@ export function ConversationPanel({
 
     Object.entries(agentHistories ?? {}).forEach(([agentId, messages]) => {
       messages.forEach((message, index) => {
+        if (isInternalAgentInput(message)) return;
         const dedupeKey =
           message.role === "user"
             ? `user:${message.message_id || message.id}:${message.content}`
