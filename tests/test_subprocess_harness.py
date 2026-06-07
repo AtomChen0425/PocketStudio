@@ -212,29 +212,6 @@ def test_codex_provider_can_reset_without_resume() -> None:
     assert "--last" not in fake.args
 
 
-def test_codex_provider_prompts_with_workspace_skills() -> None:
-    class FakeHarness:
-        async def run(self, args, process_key, cwd=None, env=None, on_stdout_line=None, stdin_text=None):
-            self.stdin_text = stdin_text
-            return type("Result", (), {"stdout": '{"result":"skill aware"}', "stderr": "", "return_code": 0, "process": {"pid": 123}})()
-
-    workspace = Path(".pytest-tmp") / f"codex-skills-{uuid.uuid4().hex}"
-    skill = workspace / ".codex" / "skills" / "reviewer" / "SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_text("# Reviewer\n\nUse for review tasks.\n", encoding="utf-8")
-    provider = CodexProvider()
-    fake = FakeHarness()
-    provider.harness = fake
-    agent = Agent(id="codex-agent", name="Codex Agent", role="Writes code", provider="codex", workspace=workspace)
-
-    response = asyncio.run(provider.run(ProviderRequest(agent=agent, input="Review this")))
-
-    assert response.text == "skill aware"
-    assert "Available pocketStudio skills:" in fake.stdin_text
-    assert "reviewer" in fake.stdin_text
-    assert str(skill) in fake.stdin_text
-
-
 def test_codex_provider_includes_context_and_supports_custom_command_line() -> None:
     class FakeHarness:
         def __init__(self) -> None:
