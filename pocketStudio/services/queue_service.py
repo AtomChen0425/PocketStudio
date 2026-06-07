@@ -364,7 +364,7 @@ class QueueService:
         rows = self.db.fetch_all(
             """
             SELECT * FROM agent_messages
-            WHERE agent_id = ? AND id > ? AND role != 'user'
+            WHERE agent_id = ? AND id > ?
             ORDER BY id DESC
             LIMIT ?
             """,
