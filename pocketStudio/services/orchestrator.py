@@ -500,7 +500,9 @@ class Orchestrator:
         if produced:
             self.events.emit("team.iteration", {"team_id": team.id, "rounds": current_round, "runs": len(produced)})
         return produced
-
+    @staticmethod
+    def _agent_lookup(agents: list[Agent]) -> dict[str, str]:
+        return {agent.id.lower(): agent.id for agent in agents}
     def _mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent]) -> list[tuple[str, str, str]]:
         agent_by_lookup = self._agent_lookup(agents)
         mentions: list[tuple[str, str, str]] = []
