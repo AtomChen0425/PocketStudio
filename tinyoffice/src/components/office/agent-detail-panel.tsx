@@ -352,6 +352,17 @@ function ChatTabContent({
     }
   }, [chatInput, agentId, sending]);
 
+  const isBubbleRelevantToAgent = useCallback(
+    (bubble: LiveBubble) => {
+      if (bubble.agentId === agentId) return true;
+      if (bubble.agentId.startsWith("_user_")) {
+        return bubble.targetAgents.includes(agentId);
+      }
+      return bubble.targetAgents.includes(agentId);
+    },
+    [agentId],
+  );
+
   const conversationEntries = useMemo<ConversationEntry[]>(() => {
     const historyEntries: ConversationEntry[] = [];
     const seenHistory = new Set<string>();
@@ -381,7 +392,7 @@ function ChatTabContent({
 
     // Filter bubbles for this agent
     const liveEntries = bubbles
-      .filter((b) => b.agentId === agentId || b.targetAgents.includes(agentId) || b.agentId.startsWith("_user_"))
+      .filter(isBubbleRelevantToAgent)
       .map((bubble, index) => {
         if (bubble.agentId.startsWith("_user_")) {
           return {
@@ -422,7 +433,7 @@ function ChatTabContent({
         return true;
       })
       .slice(-60);
-  }, [agentHistories, agents, bubbles, agentId]);
+  }, [agentHistories, agents, bubbles, agentId, isBubbleRelevantToAgent]);
 
   useEffect(() => {
     const node = scrollRef.current;

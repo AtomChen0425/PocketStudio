@@ -5,6 +5,13 @@ import { ArrowUp, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   PromptInput,
   PromptInputAction,
   PromptInputActions,
@@ -196,6 +203,8 @@ export function ConversationPanel({
 
   const activeButtonClass = "border-[#465e14] bg-[#111111] text-[#a3e635]";
   const inactiveButtonClass = "border-[#885c47] bg-[#dcc3a3] text-[#5c4637] hover:border-[#465e14] hover:bg-[#111111] hover:text-[#a3e635]";
+  const teamEntries = Object.entries(teams ?? {});
+  const hasTeams = teamEntries.length > 0;
 
   return (
     <div
@@ -204,7 +213,7 @@ export function ConversationPanel({
         width: `${(584 / PIXEL_SCENE_LAYOUT.width) * 100}%`,
         height: "100%",
       }}
-    >
+      >
       <div className="border-b border-[#885c47] bg-[#be9565] px-4 py-3 shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]">
         <div className="flex flex-wrap gap-2">
           <button
@@ -216,19 +225,7 @@ export function ConversationPanel({
           >
             All Agents
           </button>
-          {agentEntries.map(([agentId, agent]) => (
-            <button
-              key={agentId}
-              type="button"
-              onClick={() => setConversationFilterAndStick(agentId)}
-              className={`border px-3 py-1.5 font-mono text-[10px] transition ${
-                conversationFilter === agentId ? activeButtonClass : inactiveButtonClass
-              }`}
-            >
-              {agent.name || `@${agentId}`}
-            </button>
-          ))}
-          {Object.entries(teams ?? {}).map(([teamId, team]) => (
+          {hasTeams && teamEntries.map(([teamId, team]) => (
             <button
               key={`team:${teamId}`}
               type="button"
@@ -240,6 +237,50 @@ export function ConversationPanel({
               {team.name || `@team:${teamId}`}
             </button>
           ))}
+          {hasTeams ? (
+            <Select
+              value={
+                conversationFilter.startsWith("team:") || conversationFilter === "all"
+                  ? ""
+                  : conversationFilter
+              }
+              onValueChange={(value) => setConversationFilterAndStick(value)}
+            >
+              <SelectTrigger
+                className={`h-auto min-h-[32px] border px-3 py-1.5 font-mono text-[10px] shadow-none ${
+                  conversationFilter.startsWith("team:") || conversationFilter === "all"
+                    ? "border-[#885c47] bg-[#dcc3a3] text-[#5c4637] hover:border-[#465e14] hover:bg-[#111111] hover:text-[#a3e635]"
+                    : "border-[#465e14] bg-[#111111] text-[#a3e635]"
+                }`}
+              >
+                <SelectValue placeholder="Agents" />
+              </SelectTrigger>
+              <SelectContent className="border-[#885c47] bg-[#f4e7d6] text-[#241b16] shadow-[0_10px_24px_rgba(36,24,16,0.22)]">
+                {agentEntries.map(([agentId, agent]) => (
+                  <SelectItem
+                    key={agentId}
+                    value={agentId}
+                    className="text-[#241b16] data-[highlighted]:bg-[#be9565] data-[highlighted]:text-[#241b16] data-[state=checked]:bg-[#d4c4a8] data-[state=checked]:text-[#241b16]"
+                  >
+                    {agent.name || `@${agentId}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            agentEntries.map(([agentId, agent]) => (
+              <button
+                key={agentId}
+                type="button"
+                onClick={() => setConversationFilterAndStick(agentId)}
+                className={`border px-3 py-1.5 font-mono text-[10px] transition ${
+                  conversationFilter === agentId ? activeButtonClass : inactiveButtonClass
+                }`}
+              >
+                {agent.name || `@${agentId}`}
+              </button>
+            ))
+          )}
         </div>
       </div>
 
