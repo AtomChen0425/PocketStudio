@@ -171,9 +171,15 @@ def test_codex_provider_builds_args_and_parses_jsonl() -> None:
         workspace=Path.cwd(),
     )
 
-    response = asyncio.run(provider.run(ProviderRequest(agent=agent, input="Do work")))
+    progress = []
+    response = asyncio.run(provider.run(ProviderRequest(agent=agent, input="Do work", progress=progress.append)))
 
     assert response.text == "codex output"
+    assert progress
+    assert progress[0]["providerEventType"] == "item.completed"
+    assert progress[0]["summary"] == "codex output"
+    assert progress[0]["content"] == "codex output"
+    assert progress[0]["raw"]["item"]["type"] == "agent_message"
     assert fake.process_key == "codex-agent"
     assert fake.cwd == Path.cwd()
     assert fake.args[:3] == ["exec", "resume", "--last"]

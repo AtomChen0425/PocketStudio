@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePolling } from "@/lib/hooks";
 import {
   getAgents, getTeams, saveTeam, deleteTeam,
-  type AgentConfig, type TeamConfig,
+  getTeamWorkflows, saveTeamWorkflow, validateTeamWorkflow,
+  type AgentConfig, type TeamConfig, type WorkflowDefinition,
 } from "@/lib/api";
 import {
   ReactFlow,
@@ -27,6 +28,7 @@ import {
   X, Check, Loader2,
 } from "lucide-react";
 import { agentColor } from "@/components/sidebar";
+import { WorkflowEditor } from "@/components/team/workflow-editor";
 import { cn } from "@/lib/utils";
 
 type FormData = {
@@ -34,11 +36,56 @@ type FormData = {
   name: string;
   agents: string[];
   leader_agent: string;
+  useWorkflow: boolean;
+  workflowId: string;
+  workflowName: string;
+  workflowJson: string;
+  originalWorkflowId: string;
 };
 
 const emptyForm: FormData = {
-  id: "", name: "", agents: [], leader_agent: "",
+  id: "",
+  name: "",
+  agents: [],
+  leader_agent: "",
+  useWorkflow: false,
+  workflowId: "",
+  workflowName: "",
+  workflowJson: "",
+  originalWorkflowId: "",
 };
+
+function prettyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function extractWorkflowDefinition(value: unknown): WorkflowDefinition {
+  if (!value || typeof value !== "object") {
+    throw new Error("Workflow JSON must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const workflow = record.workflow && typeof record.workflow === "object"
+    ? record.workflow as Record<string, unknown>
+    : record;
+  const definition = workflow.definition && typeof workflow.definition === "object"
+    ? workflow.definition
+    : workflow;
+  const candidate = definition as Partial<WorkflowDefinition>;
+  if (!candidate.entrypoint || !Array.isArray(candidate.nodes)) {
+    throw new Error("Workflow JSON must include entrypoint and nodes");
+  }
+  return {
+    version: candidate.version ?? 1,
+    entrypoint: candidate.entrypoint,
+    outputNode: candidate.outputNode || "",
+    nodes: candidate.nodes as WorkflowDefinition["nodes"],
+    edges: Array.isArray(candidate.edges) ? candidate.edges as WorkflowDefinition["edges"] : [],
+    conditionalEdges: Array.isArray(candidate.conditionalEdges)
+      ? candidate.conditionalEdges as WorkflowDefinition["conditionalEdges"]
+      : [],
+    metadata: candidate.metadata || {},
+  };
+}
 
 // ── Mini ReactFlow node types for team cards ──────────────────────────────
 
@@ -169,9 +216,28 @@ export default function TeamsPage() {
       name: team.name,
       agents: [...team.agents],
       leader_agent: team.leader_agent,
+      useWorkflow: team.mode === "workflow",
+      workflowId: "",
+      workflowName: "",
+      workflowJson: "",
+      originalWorkflowId: "",
     });
     setIsNew(false);
     setError("");
+    getTeamWorkflows(id)
+      .then((workflows) => {
+        const activeWorkflow = workflows.find((workflow) => workflow.enabled);
+        if (!activeWorkflow) return;
+        setEditing((current) => current?.id === id ? {
+          ...current,
+          useWorkflow: true,
+          workflowId: activeWorkflow.id,
+          workflowName: activeWorkflow.name,
+          workflowJson: prettyJson(activeWorkflow.definition),
+          originalWorkflowId: activeWorkflow.id,
+        } : current);
+      })
+      .catch((err) => setError((err as Error).message));
   };
 
   const cancel = () => { setEditing(null); setError(""); };
@@ -195,10 +261,43 @@ export default function TeamsPage() {
       setError("A leader agent must be selected");
       return;
     }
+    let workflowDefinition: WorkflowDefinition | null = null;
+    const teamId = id.toLowerCase();
+    if (editing.useWorkflow) {
+      try {
+        workflowDefinition = extractWorkflowDefinition(JSON.parse(editing.workflowJson));
+      } catch (err) {
+        setError((err as Error).message);
+        return;
+      }
+      const workflowAgentIds = workflowDefinition.nodes
+        .filter((node) => (node.type || "agent") === "agent")
+        .map((node) => node.agentId || "");
+      const missingAgentIds = workflowAgentIds.filter((agentId) => !teamAgents.includes(agentId));
+      if (missingAgentIds.length > 0) {
+        setError(`Workflow references agents outside this team: ${missingAgentIds.join(", ")}`);
+        return;
+      }
+    }
     setSaving(true);
     setError("");
     try {
-      await saveTeam(id.toLowerCase(), { name, agents: teamAgents, leader_agent });
+      await saveTeam(teamId, {
+        name,
+        agents: teamAgents,
+        leader_agent,
+        mode: editing.useWorkflow ? "workflow" : "chain",
+      });
+      if (editing.useWorkflow && workflowDefinition) {
+        await validateTeamWorkflow(teamId, workflowDefinition);
+        await saveTeamWorkflow(teamId, editing.workflowId || `${teamId}-workflow`, {
+          name: editing.workflowName || "Team Workflow",
+          definition: workflowDefinition,
+          enabled: true,
+        });
+      } else if (editing.originalWorkflowId) {
+        await saveTeamWorkflow(teamId, editing.originalWorkflowId, { enabled: false });
+      }
       setEditing(null);
       refresh();
     } catch (err) {
@@ -482,6 +581,28 @@ function TeamEditor({
             </div>
           </div>
         )}
+
+        <WorkflowEditor
+          enabled={form.useWorkflow}
+          workflowId={form.workflowId}
+          workflowName={form.workflowName}
+          definitionJson={form.workflowJson}
+          agents={availableAgents}
+          teamAgentIds={form.agents}
+          leaderAgentId={form.leader_agent}
+          onEnabledChange={(enabled) => setForm({
+            ...form,
+            useWorkflow: enabled,
+            workflowId: enabled ? form.workflowId || `${form.id || "team"}-workflow` : form.workflowId,
+            workflowName: enabled ? form.workflowName || "Team Workflow" : form.workflowName,
+          })}
+          onWorkflowIdChange={(workflowId) => setForm({ ...form, workflowId })}
+          onWorkflowNameChange={(workflowName) => setForm({ ...form, workflowName })}
+          onDefinitionJsonChange={(workflowJson) => setForm({ ...form, workflowJson })}
+          onValidateDefinition={async (definition) => {
+            await validateTeamWorkflow(form.id.toLowerCase(), definition);
+          }}
+        />
 
         {error && (
           <p className="text-sm text-destructive">{error}</p>

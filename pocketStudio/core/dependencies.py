@@ -17,6 +17,7 @@ from pocketStudio.services.schedule_service import ScheduleService
 from pocketStudio.services.settings_service import SettingsService
 from pocketStudio.services.task_service import TaskService
 from pocketStudio.services.team_service import TeamService
+from pocketStudio.services.workflow_service import WorkflowService
 from pocketStudio.channels.telegram import TelegramChannelService
 from pocketStudio.services.worker_service import WorkerService
 
@@ -42,6 +43,11 @@ def get_agent_service() -> AgentService:
 @lru_cache
 def get_team_service() -> TeamService:
     return TeamService(get_database(), get_settings())
+
+
+@lru_cache
+def get_workflow_service() -> WorkflowService:
+    return WorkflowService(get_database(), get_team_service())
 
 
 @lru_cache
@@ -123,6 +129,7 @@ def get_orchestrator() -> Orchestrator:
         events=get_event_service(),
         providers=get_provider_registry(),
         projects=get_project_service(),
+        workflows=get_workflow_service(),
     )
 
 

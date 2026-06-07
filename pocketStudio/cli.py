@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from pocketStudio.visualizer import VisualizerClient, run_chatroom_viewer, run_team_visualizer
+
 
 DEFAULT_API_URL = "http://127.0.0.1:3777"
 DEFAULT_HOST = "127.0.0.1"
@@ -208,6 +210,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Show system status")
     sub.add_parser("version", help="Show pocketStudio version")
+
+    visualize = sub.add_parser("visualize", help="Show the live team visualizer")
+    visualize.add_argument("--team", "-t")
+    visualize.add_argument("--interval", type=float, default=1.0)
+    visualize.add_argument("--events", type=int, default=80)
+    visualize.add_argument("--no-clear", action="store_true")
+    visualize.add_argument("--once", action="store_true")
+
+    chatroom = sub.add_parser("chatroom", help="Watch or post to a team chatroom")
+    chatroom.add_argument("team")
+    chatroom.add_argument("--interval", type=float, default=1.0)
+    chatroom.add_argument("--limit", type=int, default=50)
+    chatroom.add_argument("--no-clear", action="store_true")
+    chatroom.add_argument("--once", action="store_true")
+    chatroom.add_argument("--send")
+    chatroom.add_argument("--sender", default="user")
 
     daemon = sub.add_parser("daemon", help="Local API daemon process operations")
     daemon_sub = daemon.add_subparsers(dest="daemon_command", required=True)
@@ -433,6 +451,26 @@ def run(args: argparse.Namespace, client: ApiClient) -> int:
         return print_json(client.get("/api/status"))
     if args.command == "version":
         return print_json({"ok": True, "name": "pocketstudio", "version": package_version()})
+    if args.command == "visualize":
+        return run_team_visualizer(
+            VisualizerClient(getattr(client, "base_url", None)),
+            team_id=args.team,
+            interval=args.interval,
+            once=args.once,
+            event_limit=args.events,
+            clear_screen=not args.no_clear,
+        )
+    if args.command == "chatroom":
+        return run_chatroom_viewer(
+            VisualizerClient(getattr(client, "base_url", None)),
+            team_id=args.team,
+            interval=args.interval,
+            once=args.once,
+            send=args.send,
+            sender=args.sender,
+            limit=args.limit,
+            clear_screen=not args.no_clear,
+        )
     if args.command == "daemon":
         return run_daemon(args)
     if args.command == "logs":

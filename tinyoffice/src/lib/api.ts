@@ -78,6 +78,61 @@ export interface TeamConfig {
   name: string;
   agents: string[];
   leader_agent: string;
+  mode?: "chain" | "fanout" | "workflow";
+}
+
+export interface WorkflowNode {
+  id: string;
+  agentId?: string;
+  prompt?: string;
+  inputTemplate?: string;
+  type?: string;
+  routingFunction?: WorkflowRoutingFunction;
+  [key: string]: unknown;
+}
+
+export interface WorkflowEdge {
+  source: string;
+  target: string;
+  condition?: string;
+  [key: string]: unknown;
+}
+
+export interface WorkflowRoute {
+  condition: string;
+  target: string;
+}
+
+export interface WorkflowRoutingFunction {
+  language: "python";
+  code: string;
+  entrypoint: string;
+}
+
+export interface WorkflowConditionalEdge {
+  source: string;
+  routes: WorkflowRoute[];
+}
+
+export interface WorkflowDefinition {
+  version?: number;
+  entrypoint: string;
+  outputNode?: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  conditionalEdges?: WorkflowConditionalEdge[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface TeamWorkflow {
+  id: string;
+  teamId: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  definition: WorkflowDefinition;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Settings {
@@ -146,6 +201,16 @@ export interface AgentMessage {
   message_id: string;
   content: string;
   created_at: number;
+}
+
+export function isInternalAgentInput(message: Pick<AgentMessage, "role" | "sender">): boolean {
+  if (message.role !== "user") return false;
+  return (
+    message.sender === "orchestrator" ||
+    message.sender.startsWith("workflow:") ||
+    message.sender.startsWith("team:") ||
+    message.sender.startsWith("chatroom:")
+  );
 }
 
 // ── API Functions ─────────────────────────────────────────────────────────
@@ -255,7 +320,7 @@ export async function saveTeam(
     body: JSON.stringify({
       id,
       name: team.name,
-      mode: "chain",
+      mode: team.mode || "chain",
       agent_ids: team.agents,
       leaderAgent: team.leader_agent || "",
     }),
@@ -265,6 +330,58 @@ export async function saveTeam(
 
 export async function deleteTeam(id: string): Promise<{ ok: boolean }> {
   return apiFetch(`/api/teams/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function getTeamWorkflows(teamId: string): Promise<TeamWorkflow[]> {
+  return apiFetch<TeamWorkflow[]>(`/api/teams/${encodeURIComponent(teamId)}/workflows`);
+}
+
+export async function saveTeamWorkflow(
+  teamId: string,
+  workflowId: string,
+  workflow: {
+    name?: string;
+    description?: string;
+    definition?: WorkflowDefinition;
+    enabled?: boolean;
+  }
+): Promise<TeamWorkflow> {
+  const existing = await getTeamWorkflows(teamId);
+  const method = existing.some((item) => item.id === workflowId) ? "PUT" : "POST";
+  const path = method === "PUT"
+    ? `/api/teams/${encodeURIComponent(teamId)}/workflows/${encodeURIComponent(workflowId)}`
+    : `/api/teams/${encodeURIComponent(teamId)}/workflows`;
+  return apiFetch<TeamWorkflow>(path, {
+    method,
+    body: JSON.stringify(method === "PUT" ? workflow : { id: workflowId, ...workflow }),
+  });
+}
+
+export async function validateTeamWorkflow(
+  teamId: string,
+  definition: WorkflowDefinition
+): Promise<{ ok: boolean; order: string[] }> {
+  return apiFetch(`/api/teams/${encodeURIComponent(teamId)}/workflows/validate`, {
+    method: "POST",
+    body: JSON.stringify(definition),
+  });
+}
+
+export async function importTeamWorkflow(
+  teamId: string,
+  artifact: Record<string, unknown>
+): Promise<TeamWorkflow> {
+  return apiFetch<TeamWorkflow>(`/api/teams/${encodeURIComponent(teamId)}/workflows/import`, {
+    method: "POST",
+    body: JSON.stringify(artifact),
+  });
+}
+
+export async function exportTeamWorkflow(
+  teamId: string,
+  workflowId: string
+): Promise<Record<string, unknown>> {
+  return apiFetch(`/api/teams/${encodeURIComponent(teamId)}/workflows/${encodeURIComponent(workflowId)}/export`);
 }
 
 export async function sendMessage(payload: {

@@ -22,7 +22,7 @@ export type BackendAgent = {
 export type BackendTeam = {
   id: string;
   name: string;
-  mode: "chain" | "fanout";
+  mode: "chain" | "fanout" | "workflow";
   agent_ids: string[];
   leader_agent?: string;
   leaderAgent?: string;
@@ -100,6 +100,7 @@ export function normalizeTeam(team: BackendTeam): TeamConfig {
     name: team.name,
     agents: team.agent_ids || [],
     leader_agent: team.leader_agent || team.leaderAgent || team.agent_ids?.[0] || "",
+    mode: team.mode || "chain",
   };
 }
 

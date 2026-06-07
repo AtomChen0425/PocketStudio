@@ -14,6 +14,7 @@ import {
 import { Markdown } from "@/components/ui/markdown";
 import { PIXEL_SCENE_LAYOUT } from "./pixel-office-scene";
 import {
+  isInternalAgentInput,
   sendMessage,
   getAgentSkills,
   getAgentSystemPrompt,
@@ -358,6 +359,7 @@ function ChatTabContent({
     // Only show this agent's history
     const agentMessages = agentHistories?.[agentId] ?? [];
     agentMessages.forEach((message, index) => {
+      if (isInternalAgentInput(message)) return;
       const dedupeKey =
         message.role === "user"
           ? `user:${message.message_id || message.id}:${message.content}`
