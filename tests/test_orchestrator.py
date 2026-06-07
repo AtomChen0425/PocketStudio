@@ -379,19 +379,6 @@ def test_team_leader_runs_first_and_mentions_enqueue_teammates() -> None:
         shutil.rmtree(home, ignore_errors=True)
 
 
-def test_team_bracket_parser_handles_nested_brackets_and_strips_tags() -> None:
-    text = "Plan first [@coder,reviewer: fix arr[0] and map[key]] then [#dev: update [phase-1] board]"
-
-    mentions = Orchestrator._extract_tags(text, "@")
-    broadcasts = Orchestrator._extract_tags(text, "#")
-    stripped = Orchestrator._strip_tags(text, "@")
-
-    assert mentions == [("coder,reviewer", "fix arr[0] and map[key]")]
-    assert broadcasts == [("dev", "update [phase-1] board")]
-    assert "Plan first" in stripped
-    assert "then [#dev: update [phase-1] board]" in stripped
-    assert "fix arr" not in stripped
-
 
 def test_team_routing_converts_tags_to_readable_text() -> None:
     text = "Plan [@coder,reviewer: fix arr[0]] and [#dev: update [phase-1] board]"

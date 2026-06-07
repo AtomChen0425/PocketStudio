@@ -713,18 +713,6 @@ class Orchestrator:
                 return team
         return None
 
-    @staticmethod
-    def _agent_lookup(agents: list[Agent]) -> dict[str, str]:
-        return {agent.id.lower(): agent.id for agent in agents}
-
-    @staticmethod
-    def _extract_tags(text: str, prefix: str) -> list[tuple[str, str]]:
-        return extract_tags(text, prefix)
-
-    @staticmethod
-    def _strip_tags(text: str, prefix: str) -> str:
-        return strip_tags(text, prefix)
-
     async def _run_agent(self, agent: Agent, input_text: str, context: list[str]) -> AgentRun:
         if not agent.enabled:
             raise ValueError(f"Agent '{agent.id}' is disabled")
