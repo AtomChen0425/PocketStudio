@@ -8,6 +8,15 @@ from pocketStudio.models.task import TaskCreate, Task, TaskCommentCreate, TaskCo
 from pocketStudio.models.project import ProjectCreate, Project
 from pocketStudio.models.schedule import ScheduleCreate, Schedule
 from pocketStudio.models.event import Event
+from pocketStudio.models.workflow import (
+    TeamWorkflow,
+    TeamWorkflowCreate,
+    TeamWorkflowUpdate,
+    WorkflowConditionalEdge,
+    WorkflowDefinition,
+    WorkflowRoute,
+    WorkflowRoutingFunction,
+)
 
 __all__ = [
     "TeamMode",
@@ -34,4 +43,11 @@ __all__ = [
     "ScheduleCreate",
     "Schedule",
     "Event",
+    "WorkflowDefinition",
+    "WorkflowRoute",
+    "WorkflowRoutingFunction",
+    "WorkflowConditionalEdge",
+    "TeamWorkflow",
+    "TeamWorkflowCreate",
+    "TeamWorkflowUpdate",
 ]

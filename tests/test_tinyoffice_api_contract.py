@@ -82,6 +82,48 @@ def test_tinyoffice_core_api_contracts_return_expected_shapes() -> None:
     assert client.delete(f"/api/agents/{agent_id}").json() == {"ok": True}
 
 
+def test_team_workflow_import_export_api_accepts_json_artifacts() -> None:
+    client = TestClient(app)
+    planner_id = unique("workflow-planner")
+    coder_id = unique("workflow-coder")
+    team_id = unique("workflow-team")
+    client.post("/api/agents", json={"id": planner_id, "name": "Planner", "role": "Plans", "provider": "local"})
+    client.post("/api/agents", json={"id": coder_id, "name": "Coder", "role": "Codes", "provider": "local"})
+    client.post(
+        "/api/teams",
+        json={"id": team_id, "name": "Workflow Team", "mode": "chain", "agent_ids": [planner_id, coder_id]},
+    )
+    artifact = {
+        "format": "pocketstudio.team.workflow",
+        "formatVersion": 1,
+        "workflow": {
+            "id": "delivery",
+            "name": "Delivery",
+            "definition": {
+                "entrypoint": "plan",
+                "outputNode": "build",
+                "nodes": [
+                    {"id": "plan", "agentId": planner_id, "prompt": "Plan it"},
+                    {"id": "build", "agentId": coder_id},
+                ],
+                "edges": [{"source": "plan", "target": "build"}],
+            },
+        },
+    }
+
+    imported = client.post(f"/api/teams/{team_id}/workflows/import", json=artifact)
+    exported = client.get(f"/api/teams/{team_id}/workflows/delivery/export")
+
+    assert imported.status_code == 200
+    assert imported.json()["id"] == "delivery"
+    assert exported.status_code == 200
+    assert exported.json()["workflow"]["definition"]["outputNode"] == "build"
+
+    assert client.delete(f"/api/teams/{team_id}").json() == {"ok": True}
+    assert client.delete(f"/api/agents/{planner_id}").json() == {"ok": True}
+    assert client.delete(f"/api/agents/{coder_id}").json() == {"ok": True}
+
+
 def test_tinyoffice_task_project_comment_delete_contracts_return_ok() -> None:
     client = TestClient(app)
 

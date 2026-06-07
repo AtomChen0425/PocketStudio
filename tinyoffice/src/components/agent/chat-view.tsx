@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { usePolling, timeAgo } from "@/lib/hooks";
 import {
   getAgentMessages,
+  isInternalAgentInput,
   sendMessage,
   type AgentMessage,
 } from "@/lib/api";
@@ -87,7 +88,9 @@ export function AgentChatView({
 
   useEffect(() => {
     if (!polledMessages) return;
-    const normalized = polledMessages.map((row) => normalizeMessage(row, agentId));
+    const normalized = polledMessages
+      .filter((row) => !isInternalAgentInput(row))
+      .map((row) => normalizeMessage(row, agentId));
     setMessages((prev) => {
       const presentIds = new Set(
         normalized.map((msg) => msg.message_id).filter(Boolean)

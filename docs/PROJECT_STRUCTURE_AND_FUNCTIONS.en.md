@@ -238,6 +238,21 @@ FastAPI route layer. Keep HTTP validation, response shaping, and exception mappi
 | `set_team_leader(team_id: str, agent_id: str, service: TeamService=Depends(get_team_service))` | Updates or persists an existing resource. |
 | `delete_team(team_id: str, service: TeamService=Depends(get_team_service))` | Deletes a resource or clears state. |
 
+### `pocketStudio/api/workflows.py`
+
+FastAPI route layer. Keep HTTP validation, response shaping, and exception mapping here.
+
+| Function | Usage |
+|---|---|
+| `list_workflows(team_id: str, service: WorkflowService=Depends(get_workflow_service))` | Lists resources or query results. |
+| `upsert_workflow(team_id: str, payload: TeamWorkflowCreate, service: WorkflowService=Depends(get_workflow_service))` | Module-level helper. Review callers and tests before changing behavior. |
+| `validate_workflow(team_id: str, definition: WorkflowDefinition, service: WorkflowService=Depends(get_workflow_service))` | Validates input or repairs required runtime state. |
+| `import_workflow(team_id: str, payload: dict[str, Any], service: WorkflowService=Depends(get_workflow_service))` | Module-level helper. Review callers and tests before changing behavior. |
+| `get_workflow(team_id: str, workflow_id: str, service: WorkflowService=Depends(get_workflow_service))` | Reads one resource, status object, or derived view. |
+| `export_workflow(team_id: str, workflow_id: str, service: WorkflowService=Depends(get_workflow_service))` | Module-level helper. Review callers and tests before changing behavior. |
+| `update_workflow(team_id: str, workflow_id: str, payload: TeamWorkflowUpdate, service: WorkflowService=Depends(get_workflow_service))` | Updates or persists an existing resource. |
+| `delete_workflow(team_id: str, workflow_id: str, service: WorkflowService=Depends(get_workflow_service))` | Deletes a resource or clears state. |
+
 ### `pocketStudio/channels/__init__.py`
 
 External channel adapters, such as Telegram receive, pairing, and delivery logic.
@@ -370,6 +385,7 @@ Class, data model, service object, or exception type.
 | `initialize(self)` | Helper method for its service or type. |
 | `_migrate(self, conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `_add_column(conn: sqlite3.Connection, table: str, column: str, definition: str)` | Creates a resource, installs content, or adds a relationship. |
+| `_migrate_team_mode_check(conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `_backfill_task_numbers(conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `execute(self, query: str, params: Iterable[Any]=())` | Helper method for its service or type. |
 | `fetch_one(self, query: str, params: Iterable[Any]=())` | Helper method for its service or type. |
@@ -385,6 +401,7 @@ Core infrastructure for configuration, database access, dependency assembly, JSO
 | `get_event_service()` | Reads one resource, status object, or derived view. |
 | `get_agent_service()` | Reads one resource, status object, or derived view. |
 | `get_team_service()` | Reads one resource, status object, or derived view. |
+| `get_workflow_service()` | Reads one resource, status object, or derived view. |
 | `get_queue_service()` | Reads one resource, status object, or derived view. |
 | `get_response_service()` | Reads one resource, status object, or derived view. |
 | `get_plugin_service()` | Reads one resource, status object, or derived view. |
@@ -435,17 +452,13 @@ Package entry point or application entry point.
 | `async lifespan(app: FastAPI)` | Module-level helper. Review callers and tests before changing behavior. |
 | `create_app()` | Creates a resource, installs content, or adds a relationship. |
 
-### `pocketStudio/models.py`
+### `pocketStudio/models/__init__.py`
 
-Package entry point or application entry point.
+Project module.
 
-#### `TeamMode(StrEnum)`
+### `pocketStudio/models/agent.py`
 
-Class, data model, service object, or exception type.
-
-#### `MessageStatus(StrEnum)`
-
-Class, data model, service object, or exception type.
+Project module.
 
 #### `AgentCreate(BaseModel)`
 
@@ -455,29 +468,13 @@ Class, data model, service object, or exception type.
 
 Class, data model, service object, or exception type.
 
-#### `TeamCreate(BaseModel)`
+#### `AgentMessage(BaseModel)`
 
 Class, data model, service object, or exception type.
 
-#### `Team(TeamCreate)`
+### `pocketStudio/models/chat.py`
 
-Class, data model, service object, or exception type.
-
-#### `MessageCreate(BaseModel)`
-
-Class, data model, service object, or exception type.
-
-#### `QueueMessage(BaseModel)`
-
-Class, data model, service object, or exception type.
-
-#### `AgentRun(BaseModel)`
-
-Class, data model, service object, or exception type.
-
-#### `OrchestrationResult(BaseModel)`
-
-Class, data model, service object, or exception type.
+Project module.
 
 #### `ChatMessageCreate(BaseModel)`
 
@@ -487,13 +484,41 @@ Class, data model, service object, or exception type.
 
 Class, data model, service object, or exception type.
 
-#### `TaskCreate(BaseModel)`
+### `pocketStudio/models/enums.py`
+
+Project module.
+
+#### `TeamMode(StrEnum)`
 
 Class, data model, service object, or exception type.
 
-#### `Task(TaskCreate)`
+#### `MessageStatus(StrEnum)`
 
 Class, data model, service object, or exception type.
+
+### `pocketStudio/models/event.py`
+
+Project module.
+
+#### `Event(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+### `pocketStudio/models/orchestration.py`
+
+Project module.
+
+#### `AgentRun(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `OrchestrationResult(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+### `pocketStudio/models/project.py`
+
+Project module.
 
 #### `ProjectCreate(BaseModel)`
 
@@ -503,23 +528,15 @@ Class, data model, service object, or exception type.
 
 Class, data model, service object, or exception type.
 
-#### `TaskCommentCreate(BaseModel)`
+### `pocketStudio/models/queue.py`
+
+Project module.
+
+#### `MessageCreate(BaseModel)`
 
 Class, data model, service object, or exception type.
 
-#### `TaskComment(TaskCommentCreate)`
-
-Class, data model, service object, or exception type.
-
-#### `ScheduleCreate(BaseModel)`
-
-Class, data model, service object, or exception type.
-
-#### `Schedule(BaseModel)`
-
-Class, data model, service object, or exception type.
-
-#### `AgentMessage(BaseModel)`
+#### `QueueMessage(BaseModel)`
 
 Class, data model, service object, or exception type.
 
@@ -531,7 +548,97 @@ Class, data model, service object, or exception type.
 
 Class, data model, service object, or exception type.
 
-#### `Event(BaseModel)`
+### `pocketStudio/models/schedule.py`
+
+Project module.
+
+#### `ScheduleCreate(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `Schedule(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+### `pocketStudio/models/task.py`
+
+Project module.
+
+#### `TaskCreate(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `Task(TaskCreate)`
+
+Class, data model, service object, or exception type.
+
+#### `TaskCommentCreate(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `TaskComment(TaskCommentCreate)`
+
+Class, data model, service object, or exception type.
+
+### `pocketStudio/models/team.py`
+
+Project module.
+
+#### `TeamCreate(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `Team(TeamCreate)`
+
+Class, data model, service object, or exception type.
+
+### `pocketStudio/models/workflow.py`
+
+Project module.
+
+#### `WorkflowRoutingFunction(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+| Method | Usage |
+|---|---|
+| `code_must_not_be_empty(cls, value: str)` | Helper method for its service or type. |
+| `entrypoint_must_not_be_empty(cls, value: str)` | Helper method for its service or type. |
+
+#### `WorkflowNode(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `WorkflowEdge(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `WorkflowRoute(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `WorkflowConditionalEdge(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `WorkflowDefinition(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+| Method | Usage |
+|---|---|
+| `supported_version(cls, value: int)` | Helper method for its service or type. |
+| `validate_graph_shape(self)` | Validates input or repairs required runtime state. |
+
+#### `TeamWorkflowCreate(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `TeamWorkflowUpdate(BaseModel)`
+
+Class, data model, service object, or exception type.
+
+#### `TeamWorkflow(BaseModel)`
 
 Class, data model, service object, or exception type.
 
@@ -553,6 +660,7 @@ Class, data model, service object, or exception type.
 
 | Method | Usage |
 |---|---|
+| `setup_workspace(self, workspace: Path)` | Updates or persists an existing resource. |
 | `async run(self, request: ProviderRequest)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 
 ### `pocketStudio/providers/cli_agent.py`
@@ -610,11 +718,11 @@ Class, data model, service object, or exception type.
 | Method | Usage |
 |---|---|
 | `__init__(self, command: str \| None=None, base_args: list[str] \| None=None, registry: ProcessRegistry \| None=None, timeout_seconds: int=600)` | Python object lifecycle or protocol method. |
+| `setup_workspace(self, workspace: Path)` | Updates or persists an existing resource. |
 | `async run(self, request: ProviderRequest)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_args(self, request: ProviderRequest)` | Helper method for its service or type. |
 | `_custom_args(self, request: ProviderRequest)` | Helper method for its service or type. |
 | `_prompt(self, request: ProviderRequest)` | Helper method for its service or type. |
-| `_skill_context(workspace: Path)` | Helper method for its service or type. |
 | `_extract_text(cls, stdout: str)` | Converts, parses, or formats internal data. |
 | `_extract_event_text(line: str)` | Converts, parses, or formats internal data. |
 | `_parse_event(line: str)` | Converts, parses, or formats internal data. |
@@ -750,7 +858,6 @@ Class, data model, service object, or exception type.
 | `scan_memory_tree(cls, dir_path: Path, relative_path: str)` | Helper method for its service or type. |
 | `_format_memory_tree(cls, folder: dict, indent: int=0)` | Converts, parses, or formats internal data. |
 | `ensure_tool_skills_link(source: Path, target: Path)` | Validates input or repairs required runtime state. |
-| `_ensure_claude_skills_link(workspace: Path)` | Validates input or repairs required runtime state. |
 | `_sync_skill_tree(source: Path, target: Path)` | Helper method for its service or type. |
 | `_sync_root_skills(self, target: Path)` | Helper method for its service or type. |
 | `_root_skills_dir()` | Helper method for its service or type. |
@@ -860,6 +967,10 @@ Class, data model, service object, or exception type.
 
 Domain service layer for agents, teams, queues, projects, tasks, schedules, and related logic.
 
+| Function | Usage |
+|---|---|
+| `merge_dicts(left: dict[str, Any], right: dict[str, Any])` | Module-level helper. Review callers and tests before changing behavior. |
+
 #### `TeamActions`
 
 Class, data model, service object, or exception type.
@@ -868,23 +979,32 @@ Class, data model, service object, or exception type.
 |---|---|
 | `__init__(self, mentions: list[tuple[str, str]], chatrooms: list[tuple[str, str]])` | Python object lifecycle or protocol method. |
 
+#### `WorkflowState(TypedDict)`
+
+Class, data model, service object, or exception type.
+
 #### `Orchestrator`
 
 Class, data model, service object, or exception type.
 
 | Method | Usage |
 |---|---|
-| `__init__(self, agents: AgentService, teams: TeamService, queue: QueueService, chat: ChatService, events: EventService, providers: ProviderRegistry, projects: ProjectService \| None=None)` | Python object lifecycle or protocol method. |
+| `__init__(self, agents: AgentService, teams: TeamService, queue: QueueService, chat: ChatService, events: EventService, providers: ProviderRegistry, projects: ProjectService \| None=None, workflows: WorkflowService \| None=None)` | Python object lifecycle or protocol method. |
 | `enqueue(self, payload: MessageCreate)` | Queue, response, or message flow operation. |
 | `async process_one(self, newest: bool=False)` | Controls a background worker, scheduler, or processing flow. |
 | `async process_message(self, message_id: int)` | Controls a background worker, scheduler, or processing flow. |
 | `async _dispatch(self, message: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _run_team(self, message: QueueMessage, team: Team)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `async _run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `_workflow_node_input(team: Team, workflow_id: str, original_request: str, node, predecessor_ids: list[str], outputs: dict[str, str])` | Helper method for its service or type. |
+| `_langchain_runnable_for_agent(self, agent: Agent)` | Helper method for its service or type. |
+| `_build_langgraph_workflow(self, *, team: Team, workflow_id: str, message: QueueMessage, agents: list[Agent], node_by_id: dict[str, Any], agent_by_id: dict[str, Agent], predecessors: dict[str, list[str]], outgoing: dict[str, list[str]], edge_pairs: list[tuple[str, str]], conditional_edges: list[Any], entrypoint: str)` | Helper method for its service or type. |
+| `_compile_workflow_routing_function(node)` | Helper method for its service or type. |
+| `_route_from_output(output: str, conditions: list[str])` | Helper method for its service or type. |
 | `async _run_iterative_rounds(self, team: Team, message: QueueMessage, agents: list[Agent], seed_runs: list[AgentRun], max_rounds: int)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent])` | Helper method for its service or type. |
 | `_member_chain_input(self, team: Team, original_request: str, leader_run: AgentRun, previous_member_runs: list[AgentRun], member_id: str)` | Helper method for its service or type. |
 | `_leader_summary_input(self, team: Team, original_request: str, leader_run: AgentRun, member_runs: list[AgentRun])` | Helper method for its service or type. |
-| `_directed_messages_for_member(self, leader_output: str, member_id: str)` | Helper method for its service or type. |
 | `_format_runs(runs: list[AgentRun])` | Converts, parses, or formats internal data. |
 | `async _handle_team_tags(self, team: Team, run: AgentRun, message: QueueMessage, agents: list[Agent], enqueue_mentions: bool=True, process_chatrooms: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _handle_direct_agent_team_tags(self, agent: Agent, run: AgentRun, message: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
@@ -897,10 +1017,8 @@ Class, data model, service object, or exception type.
 | `_resolve_team_context_for_agent(agent_id: str, teams: list[Team])` | Helper method for its service or type. |
 | `_resolve_team_for_tag(team_id: str, teams: list[Team], agent_id: str)` | Helper method for its service or type. |
 | `_agent_lookup(agents: list[Agent])` | Helper method for its service or type. |
-| `_split_candidate_ids(raw_ids: str)` | Helper method for its service or type. |
 | `_extract_tags(text: str, prefix: str)` | Converts, parses, or formats internal data. |
 | `_strip_tags(text: str, prefix: str)` | Converts, parses, or formats internal data. |
-| `_extract_bracket_tags(text: str, prefix: str)` | Converts, parses, or formats internal data. |
 | `async _run_agent(self, agent: Agent, input_text: str, context: list[str])` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_agent_for_message(self, agent_id: str, message: QueueMessage)` | Helper method for its service or type. |
 | `_parse_target(target: str)` | Converts, parses, or formats internal data. |
@@ -1213,6 +1331,45 @@ Class, data model, service object, or exception type.
 | `async _process_next_available(self, newest: bool=False)` | Controls a background worker, scheduler, or processing flow. |
 | `_record_failure(self, exc: Exception)` | Helper method for its service or type. |
 | `async _run(self)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+
+### `pocketStudio/services/workflow_service.py`
+
+Domain service layer for agents, teams, queues, projects, tasks, schedules, and related logic.
+
+#### `WorkflowService`
+
+Class, data model, service object, or exception type.
+
+| Method | Usage |
+|---|---|
+| `__init__(self, db: Database, teams: TeamService)` | Python object lifecycle or protocol method. |
+| `create(self, team_id: str, payload: TeamWorkflowCreate)` | Creates a resource, installs content, or adds a relationship. |
+| `list(self, team_id: str)` | Lists resources or query results. |
+| `get(self, team_id: str, workflow_id: str)` | Reads one resource, status object, or derived view. |
+| `active_for_team(self, team_id: str)` | Helper method for its service or type. |
+| `update(self, team_id: str, workflow_id: str, payload: TeamWorkflowUpdate)` | Updates or persists an existing resource. |
+| `delete(self, team_id: str, workflow_id: str)` | Deletes a resource or clears state. |
+| `export_json(self, team_id: str, workflow_id: str)` | Helper method for its service or type. |
+| `import_json(self, team_id: str, payload: dict[str, Any])` | Helper method for its service or type. |
+| `validate(self, team_id: str, definition: WorkflowDefinition)` | Validates input or repairs required runtime state. |
+| `_payload_from_import_json(payload: dict[str, Any])` | Builds API or compatibility-layer response/request payloads. |
+| `_validate_definition_for_team(self, team_id: str, definition: WorkflowDefinition)` | Validates input or repairs required runtime state. |
+| `graph_io(definition: WorkflowDefinition)` | Helper method for its service or type. |
+| `terminal_nodes(definition: WorkflowDefinition)` | Helper method for its service or type. |
+| `_topological_order(definition: WorkflowDefinition)` | Helper method for its service or type. |
+| `_disable_other_workflows(self, team_id: str, workflow_id: str)` | Helper method for its service or type. |
+| `_to_workflow(row)` | Converts, parses, or formats internal data. |
+
+### `pocketStudio/utils/tag_parser.py`
+
+Project module.
+
+| Function | Usage |
+|---|---|
+| `split_candidate_ids(raw_ids: str)` | Module-level helper. Review callers and tests before changing behavior. |
+| `extract_tags(text: str, prefix: str)` | Converts, parses, or formats internal data. |
+| `strip_tags(text: str, prefix: str)` | Converts, parses, or formats internal data. |
+| `get_directed_messages(leader_output: str, member_id: str)` | Reads one resource, status object, or derived view. |
 
 ### `pocketStudio/visualizer.py`
 

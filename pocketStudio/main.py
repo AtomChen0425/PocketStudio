@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from pocketStudio.api import agents, chat, compat, messages, system, tasks, teams
+from pocketStudio.api import agents, chat, compat, messages, system, tasks, teams, workflows
 from pocketStudio.core.config import get_settings
 from pocketStudio.core.dependencies import get_database, get_worker_service
 
@@ -46,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(messages.router, prefix=settings.api_prefix)
     app.include_router(chat.router, prefix=settings.api_prefix)
     app.include_router(tasks.router, prefix=settings.api_prefix)
+    app.include_router(workflows.router, prefix=settings.api_prefix)
     return app
 
 
