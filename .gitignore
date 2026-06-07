@@ -5,3 +5,5 @@
 /.pocketStudio
 __pycache__/
 /.pytest-local
+/.pocketStudio1
+/pocketstudio.egg-info
