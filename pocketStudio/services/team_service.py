@@ -32,7 +32,7 @@ class TeamService:
                 payload.id,
                 payload.name,
                 payload.mode.value,
-                json.dumps(payload.agent_ids),
+                json.dumps(payload.agent_ids, ensure_ascii=False),
                 leader_agent,
                 payload.max_rounds,
                 int(payload.stop_when_idle),

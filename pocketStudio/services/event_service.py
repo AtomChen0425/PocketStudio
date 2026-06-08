@@ -17,7 +17,7 @@ class EventService:
         self._listeners: list[Callable[[Event], None]] = []
 
     def emit(self, event_type: str, payload: dict) -> Event:
-        payload_json = json.dumps(payload)
+        payload_json = json.dumps(payload, ensure_ascii=False)
         cursor = self.db.execute(
             "INSERT INTO events (type, payload) VALUES (?, ?)",
             (event_type, payload_json),

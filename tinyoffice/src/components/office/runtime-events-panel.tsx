@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { AgentConfig, OfficeEvent } from "@/lib/api";
+import { decodeUnicodeEscapes } from "@/lib/text";
 import { timeAgo } from "@/lib/hooks";
 
 type RuntimeEventsPanelProps = {
@@ -19,9 +20,9 @@ type RuntimeGroup = {
 
 function safeStringify(value: unknown): string {
   try {
-    return JSON.stringify(value, null, 2);
+    return decodeUnicodeEscapes(JSON.stringify(value, null, 2));
   } catch {
-    return String(value);
+    return decodeUnicodeEscapes(String(value));
   }
 }
 
@@ -31,13 +32,13 @@ function resolveAgentName(agentEntries: [string, AgentConfig][], agentId?: strin
 }
 
 function summarizeEvent(event: OfficeEvent): string {
-  if (typeof event.summary === "string" && event.summary.trim()) return event.summary;
-  if (typeof event.content === "string" && event.content.trim()) return event.content.slice(0, 220);
-  if (typeof event.message === "string" && event.message.trim()) return event.message.slice(0, 220);
-  if (typeof event.error === "string" && event.error.trim()) return event.error.slice(0, 220);
+  if (typeof event.summary === "string" && event.summary.trim()) return decodeUnicodeEscapes(event.summary);
+  if (typeof event.content === "string" && event.content.trim()) return decodeUnicodeEscapes(event.content.slice(0, 220));
+  if (typeof event.message === "string" && event.message.trim()) return decodeUnicodeEscapes(event.message.slice(0, 220));
+  if (typeof event.error === "string" && event.error.trim()) return decodeUnicodeEscapes(event.error.slice(0, 220));
   if (event.process && typeof event.process === "object") return "process metadata";
   if (event.raw && typeof event.raw === "object") return "raw provider event";
-  return event.type;
+  return decodeUnicodeEscapes(event.type);
 }
 
 function eventGroupKey(event: OfficeEvent): string {
@@ -72,9 +73,9 @@ export function RuntimeEventsPanel({ events, agentEntries }: RuntimeEventsPanelP
             ? `Run ${event.runId}`
             : event.agentId
               ? resolveAgentName(agentEntries, event.agentId)
-              : event.type;
+              : decodeUnicodeEscapes(event.type);
       const subtitle = [
-        event.type,
+        decodeUnicodeEscapes(event.type),
         event.agentId ? `agent ${resolveAgentName(agentEntries, event.agentId)}` : null,
         event.messageId ? `message ${event.messageId}` : null,
         event.sessionId ? `session ${event.sessionId}` : null,
@@ -163,8 +164,8 @@ export function RuntimeEventsPanel({ events, agentEntries }: RuntimeEventsPanelP
                   <div key={`${event.eventId ?? event.timestamp}-${event.type}`} className="border border-stone-800 bg-stone-950/70 px-3 py-2">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
                       <div className="text-lime-300">
-                        {event.type}
-                        {event.agentId ? <span className="ml-2 text-stone-500">@{event.agentId}</span> : null}
+                        {decodeUnicodeEscapes(event.type)}
+                        {event.agentId ? <span className="ml-2 text-stone-500">@{decodeUnicodeEscapes(event.agentId)}</span> : null}
                       </div>
                       <div className="text-stone-500">{timeAgo(event.timestamp)}</div>
                     </div>
@@ -173,9 +174,9 @@ export function RuntimeEventsPanel({ events, agentEntries }: RuntimeEventsPanelP
                       {event.messageId ? <span>message {event.messageId}</span> : null}
                       {event.sessionId ? <span>session {event.sessionId}</span> : null}
                       {event.runId ? <span>run {event.runId}</span> : null}
-                      {event.provider ? <span>{event.provider}</span> : null}
-                      {event.providerEventType ? <span>{event.providerEventType}</span> : null}
-                      {event.tool ? <span>tool {event.tool}</span> : null}
+                      {event.provider ? <span>{decodeUnicodeEscapes(event.provider)}</span> : null}
+                      {event.providerEventType ? <span>{decodeUnicodeEscapes(event.providerEventType)}</span> : null}
+                      {event.tool ? <span>tool {decodeUnicodeEscapes(event.tool)}</span> : null}
                     </div>
                     <details className="mt-2">
                       <summary className="cursor-pointer text-stone-500 hover:text-stone-300">raw</summary>

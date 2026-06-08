@@ -1,6 +1,7 @@
 import type { AgentConfig, OfficeEvent, Settings } from "@/lib/api";
 import type { SceneResponseItem, SceneRouteTarget, SceneTaskSummary } from "./pixel-office-scene";
 import { RuntimeEventsPanel } from "./runtime-events-panel";
+import { decodeUnicodeEscapes } from "@/lib/text";
 
 export type ArchivePanelId = "logs" | "runtime" | "workspace" | "outgoing" | "routing" | "tasks";
 
@@ -54,7 +55,7 @@ export function ArchivePanel({
             {(logs?.lines ?? []).length > 0 ? (
               (logs?.lines ?? []).map((line, index) => (
                 <div key={`${index}-${line.slice(0, 12)}`} className="border border-stone-800 bg-stone-900/90 px-3 py-2 break-words">
-                  {line}
+                  {decodeUnicodeEscapes(line)}
                 </div>
               ))
             ) : (
