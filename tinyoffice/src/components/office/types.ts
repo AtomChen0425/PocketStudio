@@ -9,6 +9,9 @@ export type LiveBubble = {
   message: string;
   timestamp: number;
   targetAgents: string[];
+  messageId?: string;
+  runId?: string;
+  sessionId?: string;
 };
 
 export type TeamGroup = {
@@ -46,6 +49,25 @@ export type ConversationEntry = {
   message: string;
   targetAgents: string[];
   sourceOrder: number;
+  messageId?: string;
+  runId?: string;
+  sessionId?: string;
+};
+
+export type AgentExecutionRunStatus = "running" | "completed" | "failed";
+
+export type AgentExecutionRun = {
+  key: string;
+  agentId?: string;
+  messageId?: string;
+  runId?: string;
+  sessionId?: string;
+  status: AgentExecutionRunStatus;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  summary: string;
+  events: import("@/lib/api").OfficeEvent[];
 };
 
 export type AgentWorkSession = {
@@ -164,4 +186,13 @@ export function buildTeamGroups(
 
 export function responseSubtitle(response: ResponseData) {
   return response.agent ? `@${response.agent} -> ${response.channel}` : response.channel;
+}
+
+export function summarizeExecutionEvent(event: import("@/lib/api").OfficeEvent) {
+  if (typeof event.summary === "string" && event.summary.trim()) return event.summary;
+  if (typeof event.content === "string" && event.content.trim()) return event.content.slice(0, 180);
+  if (typeof event.error === "string" && event.error.trim()) return event.error.slice(0, 180);
+  if (typeof event.providerEventType === "string" && event.providerEventType.trim()) return event.providerEventType;
+  if (typeof event.tool === "string" && event.tool.trim()) return `tool ${event.tool}`;
+  return event.type;
 }

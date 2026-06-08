@@ -141,6 +141,7 @@ export function useOfficeSse() {
                 message,
                 timestamp: event.timestamp,
                 targetAgents: target ? extractTargets(target) : extractTargets(message),
+                messageId,
               },
             ].slice(-80),
           );
@@ -182,9 +183,10 @@ export function useOfficeSse() {
         }
 
         if (event.type === "agent:response" && agentId) {
+          const responseMessageId = payload.messageId ? String(payload.messageId) : latestOpenRootId() || undefined;
           appendRuntimeEvent(
             event,
-            payload.messageId ? String(payload.messageId) : payload.sessionId ? String(payload.sessionId) : latestOpenRootId() || undefined,
+            responseMessageId || (payload.sessionId ? String(payload.sessionId) : undefined),
           );
           attachAgentToLatestRoot(agentId, event.timestamp);
           const message = (payload.content as string) || "";
@@ -198,6 +200,9 @@ export function useOfficeSse() {
                 message,
                 timestamp: event.timestamp,
                 targetAgents: extractTargets(message),
+                messageId: responseMessageId,
+                runId: payload.runId ? String(payload.runId) : undefined,
+                sessionId: payload.sessionId ? String(payload.sessionId) : undefined,
               },
             ].slice(-80),
           );

@@ -19,8 +19,9 @@ import {
 } from "@/components/ui/prompt-input";
 import { Markdown } from "@/components/ui/markdown";
 import { PIXEL_SCENE_LAYOUT } from "./pixel-office-scene";
-import { isInternalAgentInput, sendMessage, type AgentConfig, type AgentMessage, type TeamConfig } from "@/lib/api";
+import { isInternalAgentInput, sendMessage, type AgentConfig, type AgentMessage, type OfficeEvent, type TeamConfig } from "@/lib/api";
 import { timeAgo } from "@/lib/hooks";
+import { AgentExecutionCard } from "./agent-execution-card";
 import type { ConversationEntry, LiveBubble } from "./types";
 
 const AGENT_COLORS = [
@@ -42,6 +43,7 @@ type ConversationPanelProps = {
   agentEntries: [string, AgentConfig][];
   agentHistories: Record<string, AgentMessage[]> | null;
   bubbles: LiveBubble[];
+  runtimeEvents: OfficeEvent[];
   selectedAgentId?: string | null;
 };
 
@@ -51,6 +53,7 @@ export function ConversationPanel({
   agentEntries,
   agentHistories,
   bubbles,
+  runtimeEvents,
   selectedAgentId,
 }: ConversationPanelProps) {
   const [chatInput, setChatInput] = useState("");
@@ -116,6 +119,7 @@ export function ConversationPanel({
           message: message.content,
           targetAgents: message.role === "user" ? [agentId] : [],
           sourceOrder: index,
+          messageId: message.message_id,
         });
       });
     });
@@ -130,6 +134,9 @@ export function ConversationPanel({
           message: bubble.message,
           targetAgents: bubble.targetAgents,
           sourceOrder: index,
+          messageId: bubble.messageId,
+          runId: bubble.runId,
+          sessionId: bubble.sessionId,
         };
       }
 
@@ -143,6 +150,9 @@ export function ConversationPanel({
         message: bubble.message,
         targetAgents: bubble.targetAgents,
         sourceOrder: index,
+        messageId: bubble.messageId,
+        runId: bubble.runId,
+        sessionId: bubble.sessionId,
       };
     });
 
@@ -165,6 +175,18 @@ export function ConversationPanel({
         return true;
       });
   }, [agentHistories, agents, bubbles]);
+
+  const executionRunByMessageId = useMemo(() => {
+    const groups = new Map<string, OfficeEvent[]>();
+    runtimeEvents.forEach((event) => {
+      const key = event.messageId || event.sessionId || event.runId;
+      if (!key) return;
+      const bucket = groups.get(key) ?? [];
+      bucket.push(event);
+      groups.set(key, bucket);
+    });
+    return groups;
+  }, [runtimeEvents]);
 
   const visibleConversation = useMemo(() => {
     if (conversationFilter === "all") return conversationEntries.slice(-60);
@@ -294,6 +316,7 @@ export function ConversationPanel({
             visibleConversation.map((entry) => {
               const isUser = entry.role === "user";
               const initials = entry.sender.slice(0, 2).toUpperCase();
+              const executionEvents = !isUser && entry.messageId ? executionRunByMessageId.get(entry.messageId) ?? [] : [];
               return (
                 <div key={entry.id} className="flex items-start gap-3">
                   <div
@@ -304,6 +327,18 @@ export function ConversationPanel({
                     {isUser ? "You" : initials}
                   </div>
                   <div className="flex-1 min-w-0">
+                    {!isUser && entry.agentId && executionEvents.length > 0 ? (
+                      <div className="mb-2">
+                        <AgentExecutionCard
+                          agentId={entry.agentId}
+                          agentName={entry.sender}
+                          events={executionEvents}
+                          messageId={entry.messageId}
+                          runId={entry.runId}
+                          sessionId={entry.sessionId}
+                        />
+                      </div>
+                    ) : null}
                     <div className="flex items-baseline gap-2">
                       <span className="text-sm font-semibold text-[#241b16]">{entry.sender}</span>
                       <span className="text-[10px] text-[#6f5c4b]">

@@ -95,6 +95,7 @@ export default function OfficePage() {
             agentEntries={scene.agentEntries}
             agentHistories={data.agentHistories}
             bubbles={sse.bubbles}
+            runtimeEvents={runtimeEvents}
             selectedAgentId={selectedAgentId}
           />
 
