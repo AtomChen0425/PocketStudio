@@ -22,7 +22,7 @@ import { PIXEL_SCENE_LAYOUT } from "./pixel-office-scene";
 import { isInternalAgentInput, sendMessage, type AgentConfig, type AgentMessage, type OfficeEvent, type TeamConfig } from "@/lib/api";
 import { timeAgo } from "@/lib/hooks";
 import { AgentExecutionCard } from "./agent-execution-card";
-import type { ConversationEntry, LiveBubble } from "./types";
+import type { AgentExecutionRun, ConversationEntry, LiveBubble } from "./types";
 
 const AGENT_COLORS = [
   "bg-blue-500", "bg-emerald-500", "bg-purple-500", "bg-orange-500",
@@ -168,39 +168,57 @@ export function ConversationPanel({
         // Use time-bucket (5s window) to deduplicate messages that arrive via
         // both SSE (live bubbles) and API polling (agent histories) with
         // slightly different timestamps.
-        const key = entry.messageId
-          ? `${entry.role}:${entry.agentId || "boss"}:${entry.messageId}`
-          : `${entry.role}:${entry.agentId || "boss"}:${Math.round(entry.timestamp / 5000)}:${entry.message}`;
+        const key = entry.role === "user"
+          ? entry.messageId
+            ? `user:${entry.messageId}`
+            : `user:${entry.agentId || "boss"}:${Math.round(entry.timestamp / 5000)}:${entry.message}`
+          : `${entry.role}:${entry.agentId || "boss"}:${entry.messageId || "no-message"}:${entry.message}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
   }, [agentHistories, agents, bubbles]);
 
-  const executionRunByMessageId = useMemo(() => {
-    const groups = new Map<string, { agentId: string; messageId: string; runId?: string; sessionId?: string; events: OfficeEvent[] }[]>();
-    const byKey = new Map<string, { agentId: string; messageId: string; runId?: string; sessionId?: string; events: OfficeEvent[] }>();
+  const executionRuns = useMemo<AgentExecutionRun[]>(() => {
+    const runs = new Map<string, AgentExecutionRun>();
+
     runtimeEvents.forEach((event) => {
       if (!event.messageId || !event.agentId) return;
-      const runKey = event.runId || event.sessionId || event.agentId;
+      const runKey = event.runId || event.sessionId || `message:${event.messageId}`;
       const key = `${event.messageId}:${event.agentId}:${runKey}`;
-      let bucket = byKey.get(key);
-      if (!bucket) {
-        bucket = {
+      let run = runs.get(key);
+      if (!run) {
+        run = {
+          key,
           agentId: event.agentId,
           messageId: event.messageId,
           runId: event.runId,
           sessionId: event.sessionId,
+          status: "running",
+          startedAt: event.timestamp,
+          updatedAt: event.timestamp,
+          summary: "",
           events: [],
         };
-        byKey.set(key, bucket);
-        const messageBuckets = groups.get(event.messageId) ?? [];
-        messageBuckets.push(bucket);
-        groups.set(event.messageId, messageBuckets);
+        runs.set(key, run);
       }
-      bucket.events.push(event);
+      run.events.push(event);
+      run.updatedAt = Math.max(run.updatedAt, event.timestamp);
+      run.startedAt = Math.min(run.startedAt, event.timestamp);
+      if (event.type === "message:failed") {
+        run.status = "failed";
+      } else if (event.type === "agent:response" || event.type === "message:done") {
+        if (run.status !== "failed") run.status = "completed";
+      }
     });
-    return groups;
+
+    return [...runs.values()].sort((left, right) => {
+      if (left.startedAt !== right.startedAt) return left.startedAt - right.startedAt;
+      const leftAgentId = left.agentId ?? "";
+      const rightAgentId = right.agentId ?? "";
+      if (leftAgentId !== rightAgentId) return leftAgentId.localeCompare(rightAgentId);
+      return left.key.localeCompare(right.key);
+    });
   }, [runtimeEvents]);
 
   const visibleConversation = useMemo(() => {
@@ -223,6 +241,44 @@ export function ConversationPanel({
       })
       .slice(-60);
   }, [conversationEntries, conversationFilter, teams]);
+
+  const visibleExecutionRuns = useMemo(() => {
+    const teamId = conversationFilter.startsWith("team:") ? conversationFilter.slice("team:".length) : "";
+    const memberIds = teamId ? teams?.[teamId]?.agents ?? [] : [];
+    return executionRuns.filter((run) => {
+      const runAgentId = run.agentId ?? "";
+      if (conversationFilter === "all") return true;
+      if (conversationFilter.startsWith("team:")) {
+        return memberIds.includes(runAgentId);
+      }
+      return runAgentId === conversationFilter;
+    });
+  }, [conversationFilter, executionRuns, teams]);
+
+  const visibleTimeline = useMemo(() => {
+    const items = [
+      ...visibleConversation.map((entry, index) => ({
+        kind: "message" as const,
+        id: entry.id,
+        timestamp: entry.timestamp,
+        sourceOrder: index,
+        entry,
+      })),
+      ...visibleExecutionRuns.map((run, index) => ({
+        kind: "run" as const,
+        id: `run:${run.key}`,
+        timestamp: run.startedAt,
+        sourceOrder: 10_000 + index,
+        run,
+      })),
+    ];
+
+    return items.sort((left, right) => {
+      if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+      if (left.kind !== right.kind) return left.kind === "message" ? -1 : 1;
+      return left.sourceOrder - right.sourceOrder;
+    });
+  }, [visibleConversation, visibleExecutionRuns]);
 
   useEffect(() => {
     const node = conversationScrollRef.current;
@@ -327,23 +383,45 @@ export function ConversationPanel({
         className="min-h-0 flex-1 overflow-y-auto border-y border-[#885c47] bg-[#ead8c3] px-4 py-4"
       >
         <div className="space-y-3">
-          {visibleConversation.length > 0 ? (
-            visibleConversation.map((entry) => {
+          {visibleTimeline.length > 0 ? (
+            visibleTimeline.map((item) => {
+              if (item.kind === "run") {
+                const agentId = item.run.agentId ?? "";
+                const agentName = agents?.[agentId]?.name || `@${agentId}`;
+                const initials = agentName.slice(0, 2).toUpperCase();
+                return (
+                  <div key={item.id} className="flex items-start gap-3">
+                    <div className={`flex h-8 w-8 items-center justify-center text-[10px] font-bold uppercase shrink-0 text-white ${agentColor(agentId)}`}>
+                      {initials}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-sm font-semibold text-[#241b16]">{agentName}</span>
+                        <span className="text-[10px] text-[#6f5c4b]">
+                          {timeAgo(item.run.startedAt)}
+                        </span>
+                      </div>
+                      <div className="mt-1">
+                        <AgentExecutionCard
+                          key={item.run.key}
+                          agentId={agentId}
+                          agentName={agentName}
+                          events={item.run.events}
+                          messageId={item.run.messageId}
+                          runId={item.run.runId}
+                          sessionId={item.run.sessionId}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              const entry = item.entry;
               const isUser = entry.role === "user";
               const initials = entry.sender.slice(0, 2).toUpperCase();
-              const executionRuns = entry.messageId ? executionRunByMessageId.get(entry.messageId) ?? [] : [];
-              const visibleExecutionRuns = executionRuns.filter((run) => {
-                if (run.events.length === 0) return false;
-                if (conversationFilter === "all") return true;
-                if (conversationFilter.startsWith("team:")) {
-                  const teamId = conversationFilter.slice("team:".length);
-                  const memberIds = teams?.[teamId]?.agents ?? [];
-                  return memberIds.includes(run.agentId);
-                }
-                return run.agentId === conversationFilter;
-              });
               return (
-                <div key={entry.id} className="flex items-start gap-3">
+                <div key={item.id} className="flex items-start gap-3">
                   <div
                     className={`flex h-8 w-8 items-center justify-center text-[10px] font-bold uppercase shrink-0 text-white ${
                       isUser ? "bg-[#465e14]" : agentColor(entry.agentId ?? "")
@@ -352,7 +430,6 @@ export function ConversationPanel({
                     {isUser ? "You" : initials}
                   </div>
                   <div className="flex-1 min-w-0">
-                    
                     <div className="flex items-baseline gap-2">
                       <span className="text-sm font-semibold text-[#241b16]">{entry.sender}</span>
                       <span className="text-[10px] text-[#6f5c4b]">
@@ -362,21 +439,6 @@ export function ConversationPanel({
                     <Markdown className="prose prose-sm mt-0.5 max-w-none break-words text-[#241b16]/90 [&_span.rounded-sm]:bg-[#d4c4a8] [&_span.rounded-sm]:text-[#5c4637]">
                       {entry.message}
                     </Markdown>
-                    {isUser && visibleExecutionRuns.length > 0 ? (
-                      <div className="mb-2 space-y-2">
-                        {visibleExecutionRuns.map((run) => (
-                          <AgentExecutionCard
-                            key={`${run.messageId}:${run.agentId}:${run.runId ?? run.sessionId ?? "run"}`}
-                            agentId={run.agentId}
-                            agentName={agents?.[run.agentId]?.name || `@${run.agentId}`}
-                            events={run.events}
-                            messageId={run.messageId}
-                            runId={run.runId}
-                            sessionId={run.sessionId}
-                          />
-                        ))}
-                      </div>
-                    ) : null}
                   </div>
                 </div>
               );
