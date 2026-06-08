@@ -17,8 +17,14 @@ export default function OfficePage() {
   const scene = useSceneLayout({ ...data, ...sse });
   const runtimeEvents = [...(data.runtimeEvents ?? []), ...(sse.runtimeEvents ?? [])]
     .filter((event, index, array) => {
-      const key = `${event.eventId ?? ""}:${event.type}:${event.timestamp}:${event.messageId ?? ""}:${event.agentId ?? ""}`;
-      return array.findIndex((candidate) => `${candidate.eventId ?? ""}:${candidate.type}:${candidate.timestamp}:${candidate.messageId ?? ""}:${candidate.agentId ?? ""}` === key) === index;
+      const key = `${event.eventId ?? ""}:${event.type}:${event.timestamp}:${event.messageId ?? ""}:${event.agentId ?? ""}:${event.runId ?? ""}:${event.sessionId ?? ""}`;
+      return (
+        array.findIndex(
+          (candidate) =>
+            `${candidate.eventId ?? ""}:${candidate.type}:${candidate.timestamp}:${candidate.messageId ?? ""}:${candidate.agentId ?? ""}:${candidate.runId ?? ""}:${candidate.sessionId ?? ""}` ===
+            key,
+        ) === index
+      );
     })
     .sort((left, right) => left.timestamp - right.timestamp)
     .slice(-200);

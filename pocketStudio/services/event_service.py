@@ -68,12 +68,11 @@ class EventService:
     def office_event(self, event: Event) -> tuple[str, dict]:
         payload = event.payload
         timestamp = self._event_timestamp_ms(event.created_at)
-        base = {"timestamp": timestamp, "eventId": event.id}
+        base = self._office_base(event, payload, timestamp)
         if event.type == "message.queued":
             data = {
                 **base,
                 "type": "message:incoming",
-                "messageId": str(payload.get("message_id", "")),
                 "target": payload.get("target", ""),
                 "message": payload.get("content", ""),
                 "sender": payload.get("sender", "Web"),
@@ -81,16 +80,15 @@ class EventService:
             }
             return data["type"], data
         if event.type == "message.running":
-            data = {**base, "type": "message:processing", "messageId": str(payload.get("message_id", ""))}
+            data = {**base, "type": "message:processing"}
             return data["type"], data
         if event.type == "message.done":
-            data = {**base, "type": "message:done", "messageId": str(payload.get("message_id", ""))}
+            data = {**base, "type": "message:done"}
             return data["type"], data
         if event.type == "message.failed":
             data = {
                 **base,
                 "type": "message:failed",
-                "messageId": str(payload.get("message_id", "")),
                 "status": payload.get("status", "failed"),
                 "error": payload.get("error", ""),
             }
@@ -99,7 +97,6 @@ class EventService:
             data = {
                 **base,
                 "type": "agent:invoke",
-                "agentId": payload.get("agent_id", ""),
                 "provider": payload.get("provider", ""),
             }
             return data["type"], data
@@ -107,16 +104,15 @@ class EventService:
             data = {
                 **base,
                 "type": "agent:progress",
-                "agentId": payload.get("agent_id", ""),
                 "provider": payload.get("provider", ""),
                 "process": payload.get("process", {}),
             }
             return data["type"], data
         if event.type == "agent.progress":
+            office_type = self._agent_progress_type(payload)
             data = {
                 **base,
-                "type": "agent:progress",
-                "agentId": payload.get("agent_id", ""),
+                "type": office_type,
                 "provider": payload.get("provider", ""),
                 "providerEventType": payload.get("providerEventType", ""),
                 "summary": payload.get("summary", ""),
@@ -129,7 +125,6 @@ class EventService:
             data = {
                 **base,
                 "type": "agent:response",
-                "agentId": payload.get("agent_id", ""),
                 "content": payload.get("content", "Completed"),
             }
             return data["type"], data
@@ -166,6 +161,53 @@ class EventService:
             return data["type"], data
         event_type = event.type.replace(".", ":")
         return event_type, {**base, "type": event_type, **payload}
+
+    @staticmethod
+    def _office_base(event: Event, payload: dict, timestamp: int) -> dict:
+        base = {"timestamp": timestamp, "eventId": event.id}
+        message_id = EventService._str_payload(payload, "message_id", "messageId")
+        if message_id is not None:
+            base["messageId"] = message_id
+        agent_id = EventService._str_payload(payload, "agent_id", "agentId")
+        if agent_id is not None:
+            base["agentId"] = agent_id
+        run_id = EventService._str_payload(payload, "run_id", "runId")
+        if run_id is not None:
+            base["runId"] = run_id
+        session_id = EventService._str_payload(payload, "session_id", "sessionId")
+        if session_id is not None:
+            base["sessionId"] = session_id
+        return base
+
+    @staticmethod
+    def _str_payload(payload: dict, *keys: str) -> str | None:
+        for key in keys:
+            value = payload.get(key)
+            if value is None or value == "":
+                continue
+            return str(value)
+        return None
+
+    @staticmethod
+    def _agent_progress_type(payload: dict) -> str:
+        provider_event_type = str(payload.get("providerEventType") or "").lower()
+        tool = payload.get("tool")
+        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+        raw_type = str(raw.get("type") or raw.get("event") or "").lower()
+        raw_item = raw.get("item") if isinstance(raw.get("item"), dict) else {}
+        raw_item_type = str(raw_item.get("type") or "").lower()
+        probe = " ".join(part for part in [provider_event_type, raw_type, raw_item_type] if part)
+        if provider_event_type in {"stdout", "stderr"} or raw_type in {"stdout", "stderr"}:
+            return f"agent:{provider_event_type or raw_type}"
+        if isinstance(tool, str) and tool:
+            if any(token in probe for token in ("result", "completed", "complete", "done", "output")):
+                return "agent:tool_result"
+            return "agent:tool_call"
+        if "tool" in probe:
+            if any(token in probe for token in ("result", "completed", "complete", "done", "output")):
+                return "agent:tool_result"
+            return "agent:tool_call"
+        return "agent:progress"
 
     def _append_log(self, event_type: str, payload_json: str, created_at: str | None = None) -> None:
         if self.settings is None:

@@ -42,6 +42,8 @@ function summarizeEvent(event: OfficeEvent): string {
 
 function eventGroupKey(event: OfficeEvent): string {
   if (event.messageId != null && event.messageId !== "") return `message:${event.messageId}`;
+  if (event.sessionId != null && event.sessionId !== "") return `session:${event.sessionId}`;
+  if (event.runId != null && event.runId !== "") return `run:${event.runId}`;
   if (event.responseId != null) return `response:${event.responseId}`;
   if (event.agentId) return `agent:${event.agentId}:${event.eventId ?? event.timestamp}`;
   return `event:${event.eventId ?? event.timestamp}`;
@@ -49,6 +51,8 @@ function eventGroupKey(event: OfficeEvent): string {
 
 function eventGroupTitle(group: RuntimeGroup): string {
   if (group.id.startsWith("message:")) return `Message ${group.id.slice("message:".length)}`;
+  if (group.id.startsWith("session:")) return `Session ${group.id.slice("session:".length)}`;
+  if (group.id.startsWith("run:")) return `Run ${group.id.slice("run:".length)}`;
   if (group.id.startsWith("response:")) return `Response ${group.id.slice("response:".length)}`;
   if (group.id.startsWith("agent:")) return group.events[0]?.agentId ? `@${group.events[0].agentId}` : "Agent run";
   return "System event";
@@ -62,14 +66,22 @@ export function RuntimeEventsPanel({ events, agentEntries }: RuntimeEventsPanelP
       const current = grouped.get(key);
       const title = event.messageId
         ? `Message ${event.messageId}`
-        : event.agentId
-          ? resolveAgentName(agentEntries, event.agentId)
-          : event.type;
-      const subtitle = event.agentId
-        ? `${event.type} · ${resolveAgentName(agentEntries, event.agentId)}`
-        : event.messageId
-          ? `${event.type} · message ${event.messageId}`
-          : event.type;
+        : event.sessionId
+          ? `Session ${event.sessionId}`
+          : event.runId
+            ? `Run ${event.runId}`
+            : event.agentId
+              ? resolveAgentName(agentEntries, event.agentId)
+              : event.type;
+      const subtitle = [
+        event.type,
+        event.agentId ? `agent ${resolveAgentName(agentEntries, event.agentId)}` : null,
+        event.messageId ? `message ${event.messageId}` : null,
+        event.sessionId ? `session ${event.sessionId}` : null,
+        event.runId ? `run ${event.runId}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
       if (!current) {
         grouped.set(key, {
           id: key,
@@ -156,8 +168,14 @@ export function RuntimeEventsPanel({ events, agentEntries }: RuntimeEventsPanelP
                       </div>
                       <div className="text-stone-500">{timeAgo(event.timestamp)}</div>
                     </div>
-                    <div className="mt-1 text-stone-300">
-                      {summarizeEvent(event)}
+                    <div className="mt-1 text-stone-300">{summarizeEvent(event)}</div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-stone-500">
+                      {event.messageId ? <span>message {event.messageId}</span> : null}
+                      {event.sessionId ? <span>session {event.sessionId}</span> : null}
+                      {event.runId ? <span>run {event.runId}</span> : null}
+                      {event.provider ? <span>{event.provider}</span> : null}
+                      {event.providerEventType ? <span>{event.providerEventType}</span> : null}
+                      {event.tool ? <span>tool {event.tool}</span> : null}
                     </div>
                     <details className="mt-2">
                       <summary className="cursor-pointer text-stone-500 hover:text-stone-300">raw</summary>

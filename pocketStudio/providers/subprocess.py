@@ -86,6 +86,7 @@ class SubprocessHarness:
         cwd: Path | str | None = None,
         env: dict[str, str] | None = None,
         on_stdout_line: Callable[[str], None] | None = None,
+        on_stderr_line: Callable[[str], None] | None = None,
         stdin_text: str | None = None,
     ) -> SubprocessResult:
         merged_env = os.environ.copy()
@@ -110,7 +111,15 @@ class SubprocessHarness:
             except OSError as fallback_exc:
                 if not _should_fallback_to_windows_sync_subprocess(fallback_exc):
                     raise
-                return await self._run_windows_powershell_sync(command, args, cwd, merged_env, on_stdout_line, stdin_text)
+                return await self._run_windows_powershell_sync(
+                    command,
+                    args,
+                    cwd,
+                    merged_env,
+                    on_stdout_line,
+                    on_stderr_line,
+                    stdin_text,
+                )
         self.registry.register(
             process_key,
             process,
@@ -118,7 +127,7 @@ class SubprocessHarness:
         )
         try:
             stdout, stderr = await asyncio.wait_for(
-                self._communicate(process, on_stdout_line, stdin_text),
+                self._communicate(process, on_stdout_line, on_stderr_line, stdin_text),
                 timeout=self.timeout_seconds,
             )
         except TimeoutError:
@@ -170,6 +179,7 @@ class SubprocessHarness:
         cwd: Path | str | None,
         env: dict[str, str],
         on_stdout_line: Callable[[str], None] | None,
+        on_stderr_line: Callable[[str], None] | None,
         stdin_text: str | None,
     ) -> SubprocessResult:
         command_args = [
@@ -201,9 +211,13 @@ class SubprocessHarness:
         if on_stdout_line:
             for line in stdout.splitlines():
                 on_stdout_line(line.rstrip("\r\n"))
+        stderr = completed.stderr or ""
+        if on_stderr_line and stderr:
+            for line in stderr.splitlines():
+                on_stderr_line(line.rstrip("\r\n"))
         return SubprocessResult(
             stdout=stdout,
-            stderr=completed.stderr or "",
+            stderr=stderr,
             return_code=completed.returncode,
             process={
                 "pid": None,
@@ -220,10 +234,15 @@ class SubprocessHarness:
     async def _communicate(
         process: asyncio.subprocess.Process,
         on_stdout_line: Callable[[str], None] | None,
+        on_stderr_line: Callable[[str], None] | None,
         stdin_text: str | None = None,
     ) -> tuple[bytes, bytes]:
         if on_stdout_line is None or process.stdout is None:
-            return await process.communicate(input=stdin_text.encode() if stdin_text is not None else None)
+            stdout, stderr = await process.communicate(input=stdin_text.encode() if stdin_text is not None else None)
+            if on_stderr_line and stderr:
+                for line in stderr.decode(errors="replace").splitlines():
+                    on_stderr_line(line.rstrip("\r\n"))
+            return stdout, stderr
 
         if stdin_text is not None and process.stdin is not None:
             process.stdin.write(stdin_text.encode())
@@ -241,11 +260,22 @@ class SubprocessHarness:
                 stdout_parts.append(line)
                 on_stdout_line(line.decode(errors="replace").rstrip("\r\n"))
 
-        stderr_task = asyncio.create_task(process.stderr.read() if process.stderr else _empty_bytes())
-        await read_stdout()
+        stderr_parts: list[bytes] = []
+
+        async def read_stderr() -> None:
+            assert process.stderr is not None
+            while True:
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                stderr_parts.append(line)
+                if on_stderr_line is not None:
+                    on_stderr_line(line.decode(errors="replace").rstrip("\r\n"))
+
+        stderr_task = asyncio.create_task(read_stderr() if process.stderr else _empty_bytes())
+        await asyncio.gather(read_stdout(), stderr_task)
         await process.wait()
-        stderr = await stderr_task
-        return b"".join(stdout_parts), stderr
+        return b"".join(stdout_parts), b"".join(stderr_parts)
 
 
 async def _empty_bytes() -> bytes:

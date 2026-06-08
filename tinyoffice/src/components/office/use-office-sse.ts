@@ -81,11 +81,20 @@ export function useOfficeSse() {
           messageId ||
           (typeof payload.messageId === "string" ? payload.messageId : undefined) ||
           (typeof payload.message_id === "string" ? payload.message_id : undefined),
+        agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,
+        runId: typeof payload.runId === "string" ? payload.runId : undefined,
+        sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
       };
 
       setRuntimeEvents((current) => {
-        const fingerprint = `${normalized.eventId ?? ""}:${normalized.type}:${normalized.timestamp}:${normalized.messageId ?? ""}:${normalized.agentId ?? ""}`;
-        if (current.some((entry) => `${entry.eventId ?? ""}:${entry.type}:${entry.timestamp}:${entry.messageId ?? ""}:${entry.agentId ?? ""}` === fingerprint)) {
+        const fingerprint = `${normalized.eventId ?? ""}:${normalized.type}:${normalized.timestamp}:${normalized.messageId ?? ""}:${normalized.agentId ?? ""}:${normalized.runId ?? ""}:${normalized.sessionId ?? ""}`;
+        if (
+          current.some(
+            (entry) =>
+              `${entry.eventId ?? ""}:${entry.type}:${entry.timestamp}:${entry.messageId ?? ""}:${entry.agentId ?? ""}:${entry.runId ?? ""}:${entry.sessionId ?? ""}` ===
+              fingerprint,
+          )
+        ) {
           return current;
         }
         const next = [...current, normalized];
@@ -145,8 +154,22 @@ export function useOfficeSse() {
           appendRuntimeEvent(event, payload.messageId ? String(payload.messageId) : undefined);
         }
 
+        if (
+          event.type === "agent:invoke" ||
+          event.type === "agent:progress" ||
+          event.type === "agent:stdout" ||
+          event.type === "agent:stderr" ||
+          event.type === "agent:tool_call" ||
+          event.type === "agent:tool_result"
+        ) {
+          appendRuntimeEvent(
+            event,
+            payload.messageId ? String(payload.messageId) : payload.sessionId ? String(payload.sessionId) : latestOpenRootId() || undefined,
+          );
+          if (agentId) attachAgentToLatestRoot(agentId, event.timestamp);
+        }
+
         if (event.type === "agent:invoke" && agentId) {
-          appendRuntimeEvent(event, latestOpenRootId() || undefined);
           attachAgentToLatestRoot(agentId, event.timestamp);
         }
 
@@ -159,7 +182,10 @@ export function useOfficeSse() {
         }
 
         if (event.type === "agent:response" && agentId) {
-          appendRuntimeEvent(event, latestOpenRootId() || undefined);
+          appendRuntimeEvent(
+            event,
+            payload.messageId ? String(payload.messageId) : payload.sessionId ? String(payload.sessionId) : latestOpenRootId() || undefined,
+          );
           attachAgentToLatestRoot(agentId, event.timestamp);
           const message = (payload.content as string) || "";
           if (!message) return;

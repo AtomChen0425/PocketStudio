@@ -196,6 +196,8 @@ export interface OfficeEvent extends EventData {
   eventId?: number;
   messageId?: string;
   agentId?: string;
+  runId?: string;
+  sessionId?: string;
   provider?: string;
   providerEventType?: string;
   summary?: string;
@@ -819,6 +821,7 @@ export function subscribeToEvents(
   const types = eventTypes ?? [
     "message:incoming", "message:processing", "message:done", "message:failed",
     "agent:invoke", "agent:progress", "agent:response", "agent:mention",
+    "agent:stdout", "agent:stderr", "agent:tool_call", "agent:tool_result",
     "response:queued", "chat:posted", "team:chatroom",
   ];
   for (const type of types) {

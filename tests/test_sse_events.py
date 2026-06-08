@@ -38,6 +38,63 @@ def test_office_event_maps_queue_agent_response_and_team_events() -> None:
             },
         )
     )
+    generic_progress = events.office_event(
+        events.emit(
+            "agent.progress",
+            {
+                "agent_id": "a",
+                "provider": "codex",
+                "providerEventType": "item.updated",
+                "summary": "still thinking",
+                "content": "working",
+                "raw": {"type": "item.updated"},
+            },
+        )
+    )
+    stdout = events.office_event(
+        events.emit(
+            "agent.progress",
+            {
+                "agent_id": "a",
+                "provider": "cli",
+                "providerEventType": "stdout",
+                "summary": "line one",
+                "content": "line one",
+                "raw": {"line": "line one", "stream": "stdout"},
+                "message_id": "77",
+                "run_id": "run-1",
+                "session_id": "session-1",
+            },
+        )
+    )
+    tool_call = events.office_event(
+        events.emit(
+            "agent.progress",
+            {
+                "agent_id": "a",
+                "provider": "codex",
+                "providerEventType": "item.started",
+                "summary": "calling shell",
+                "content": "",
+                "tool": "shell",
+                "raw": {"type": "item.started", "item": {"type": "tool_call"}},
+            },
+        )
+    )
+    tool_result = events.office_event(
+        events.emit(
+            "agent.progress",
+            {
+                "agent_id": "a",
+                "provider": "codex",
+                "providerEventType": "item.completed",
+                "summary": "shell done",
+                "content": "",
+                "tool": "shell",
+                "raw": {"type": "item.completed", "item": {"type": "tool_result"}},
+            },
+        )
+    )
     completed = events.office_event(events.emit("agent.completed", {"agent_id": "a", "content": "done"}))
     response = events.office_event(
         events.emit(
@@ -56,12 +113,19 @@ def test_office_event_maps_queue_agent_response_and_team_events() -> None:
     assert started[0] == "agent:invoke"
     assert process[0] == "agent:progress"
     assert process[1]["process"]["pid"] == 123
-    assert progress[0] == "agent:progress"
+    assert progress[0] == "agent:tool_call"
     assert progress[1]["provider"] == "codex"
     assert progress[1]["providerEventType"] == "item.started"
     assert progress[1]["summary"] == "running command"
     assert progress[1]["content"] == "stdout"
     assert progress[1]["tool"] == "shell"
+    assert generic_progress[0] == "agent:progress"
+    assert stdout[0] == "agent:stdout"
+    assert stdout[1]["messageId"] == "77"
+    assert stdout[1]["runId"] == "run-1"
+    assert stdout[1]["sessionId"] == "session-1"
+    assert tool_call[0] == "agent:tool_call"
+    assert tool_result[0] == "agent:tool_result"
     assert completed[0] == "agent:response"
     assert response[0] == "response:queued"
     assert response[1]["senderId"] == "web-1"
