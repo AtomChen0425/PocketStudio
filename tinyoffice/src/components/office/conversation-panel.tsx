@@ -168,8 +168,9 @@ export function ConversationPanel({
         // Use time-bucket (5s window) to deduplicate messages that arrive via
         // both SSE (live bubbles) and API polling (agent histories) with
         // slightly different timestamps.
-        const timeBucket = Math.round(entry.timestamp / 5000);
-        const key = `${entry.role}:${entry.agentId || "boss"}:${timeBucket}:${entry.message}`;
+        const key = entry.messageId
+          ? `${entry.role}:${entry.agentId || "boss"}:${entry.messageId}`
+          : `${entry.role}:${entry.agentId || "boss"}:${Math.round(entry.timestamp / 5000)}:${entry.message}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -177,13 +178,27 @@ export function ConversationPanel({
   }, [agentHistories, agents, bubbles]);
 
   const executionRunByMessageId = useMemo(() => {
-    const groups = new Map<string, OfficeEvent[]>();
+    const groups = new Map<string, { agentId: string; messageId: string; runId?: string; sessionId?: string; events: OfficeEvent[] }[]>();
+    const byKey = new Map<string, { agentId: string; messageId: string; runId?: string; sessionId?: string; events: OfficeEvent[] }>();
     runtimeEvents.forEach((event) => {
-      const key = event.messageId || event.sessionId || event.runId;
-      if (!key) return;
-      const bucket = groups.get(key) ?? [];
-      bucket.push(event);
-      groups.set(key, bucket);
+      if (!event.messageId || !event.agentId) return;
+      const runKey = event.runId || event.sessionId || event.agentId;
+      const key = `${event.messageId}:${event.agentId}:${runKey}`;
+      let bucket = byKey.get(key);
+      if (!bucket) {
+        bucket = {
+          agentId: event.agentId,
+          messageId: event.messageId,
+          runId: event.runId,
+          sessionId: event.sessionId,
+          events: [],
+        };
+        byKey.set(key, bucket);
+        const messageBuckets = groups.get(event.messageId) ?? [];
+        messageBuckets.push(bucket);
+        groups.set(event.messageId, messageBuckets);
+      }
+      bucket.events.push(event);
     });
     return groups;
   }, [runtimeEvents]);
@@ -316,7 +331,17 @@ export function ConversationPanel({
             visibleConversation.map((entry) => {
               const isUser = entry.role === "user";
               const initials = entry.sender.slice(0, 2).toUpperCase();
-              const executionEvents = !isUser && entry.messageId ? executionRunByMessageId.get(entry.messageId) ?? [] : [];
+              const executionRuns = entry.messageId ? executionRunByMessageId.get(entry.messageId) ?? [] : [];
+              const visibleExecutionRuns = executionRuns.filter((run) => {
+                if (run.events.length === 0) return false;
+                if (conversationFilter === "all") return true;
+                if (conversationFilter.startsWith("team:")) {
+                  const teamId = conversationFilter.slice("team:".length);
+                  const memberIds = teams?.[teamId]?.agents ?? [];
+                  return memberIds.includes(run.agentId);
+                }
+                return run.agentId === conversationFilter;
+              });
               return (
                 <div key={entry.id} className="flex items-start gap-3">
                   <div
@@ -327,18 +352,7 @@ export function ConversationPanel({
                     {isUser ? "You" : initials}
                   </div>
                   <div className="flex-1 min-w-0">
-                    {!isUser && entry.agentId && executionEvents.length > 0 ? (
-                      <div className="mb-2">
-                        <AgentExecutionCard
-                          agentId={entry.agentId}
-                          agentName={entry.sender}
-                          events={executionEvents}
-                          messageId={entry.messageId}
-                          runId={entry.runId}
-                          sessionId={entry.sessionId}
-                        />
-                      </div>
-                    ) : null}
+                    
                     <div className="flex items-baseline gap-2">
                       <span className="text-sm font-semibold text-[#241b16]">{entry.sender}</span>
                       <span className="text-[10px] text-[#6f5c4b]">
@@ -348,6 +362,21 @@ export function ConversationPanel({
                     <Markdown className="prose prose-sm mt-0.5 max-w-none break-words text-[#241b16]/90 [&_span.rounded-sm]:bg-[#d4c4a8] [&_span.rounded-sm]:text-[#5c4637]">
                       {entry.message}
                     </Markdown>
+                    {isUser && visibleExecutionRuns.length > 0 ? (
+                      <div className="mb-2 space-y-2">
+                        {visibleExecutionRuns.map((run) => (
+                          <AgentExecutionCard
+                            key={`${run.messageId}:${run.agentId}:${run.runId ?? run.sessionId ?? "run"}`}
+                            agentId={run.agentId}
+                            agentName={agents?.[run.agentId]?.name || `@${run.agentId}`}
+                            events={run.events}
+                            messageId={run.messageId}
+                            runId={run.runId}
+                            sessionId={run.sessionId}
+                          />
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               );

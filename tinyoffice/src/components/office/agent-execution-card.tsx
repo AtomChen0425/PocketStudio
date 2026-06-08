@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, CircleDot, CheckCircle2, XCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleDot } from "lucide-react";
 import type { OfficeEvent } from "@/lib/api";
 import { timeAgo } from "@/lib/hooks";
 import { summarizeExecutionEvent } from "./types";
@@ -62,6 +62,7 @@ export function AgentExecutionCard({
 
   const sortedEvents = [...relevantEvents].sort((left, right) => left.timestamp - right.timestamp);
   const status = getRunStatus(sortedEvents);
+  // if (status !== "running") return null;
   const summary = getRunSummary(sortedEvents);
   const startedAt = sortedEvents[0]?.timestamp ?? Date.now();
   const endedAt = sortedEvents[sortedEvents.length - 1]?.timestamp ?? startedAt;
@@ -87,8 +88,6 @@ export function AgentExecutionCard({
           <div className="shrink-0 text-right text-[#6f5c4b]">
             <div className="flex items-center justify-end gap-1">
               {status === "running" ? <CircleDot className="size-3.5 text-[#465e14]" /> : null}
-              {status === "completed" ? <CheckCircle2 className="size-3.5 text-[#465e14]" /> : null}
-              {status === "failed" ? <XCircle className="size-3.5 text-[#8b3e2f]" /> : null}
               <span>{timeAgo(endedAt)}</span>
             </div>
             <div className="mt-0.5">{timeAgo(startedAt)}</div>
