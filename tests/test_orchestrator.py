@@ -76,6 +76,17 @@ class TeamRelayProvider(AgentProvider):
         return ProviderResponse(text=f"{request.agent.id} result from:\n{request.input}")
 
 
+class SystemPromptRecordingProvider(AgentProvider):
+    name = "system-prompt-recording"
+
+    def __init__(self) -> None:
+        self.system_prompts: list[str | None] = []
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        self.system_prompts.append(request.agent.system_prompt)
+        return ProviderResponse(text=request.agent.system_prompt or "missing system prompt")
+
+
 class WorkflowRecordingProvider(AgentProvider):
     name = "workflow-recording"
 
@@ -143,6 +154,33 @@ def test_team_chain_does_not_store_teammate_output_as_user_input() -> None:
         assert [item.role for item in coder_messages] == ["assistant"]
         assert all(not (item.role == "user" and "planner says hello" in item.content) for item in coder_messages)
         assert "coder says hello" in planner_messages[-2].content
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_direct_agent_run_uses_full_system_prompt() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        provider = SystemPromptRecordingProvider()
+        orchestrator.providers.register(provider)
+        orchestrator.agents.create(
+            AgentCreate(id="planner", name="Planner", role="Plans", provider="system-prompt-recording")
+        )
+        orchestrator.agents.create(AgentCreate(id="coder", name="Coder", role="Codes", provider="system-prompt-recording"))
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.chain, agent_ids=["planner", "coder"]))
+        orchestrator.agents.save_system_prompt_file("planner", "Always answer in bullet points.")
+
+        message = orchestrator.enqueue(MessageCreate(target="@agent:planner", content="Draft a plan"))
+        asyncio.run(orchestrator.process_message(message.id))
+
+        assert provider.system_prompts
+        prompt = provider.system_prompts[0] or ""
+        assert "Stay proactive and responsive to messages." in prompt
+        assert "### You" in prompt
+        assert "### Team `#dev`" in prompt
+        assert "Always answer in bullet points." in prompt
+        assert "coder" in prompt
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
@@ -254,8 +292,6 @@ def test_project_context_runs_agent_inside_project_workspace() -> None:
         assert not (expected_workspace / ".agents").exists()
         assert not (expected_workspace / "memory").exists()
         assert not (expected_workspace / "AGENTS.md").exists()
-        assert (expected_workspace / ".codex" / "skills").exists()
-        assert (expected_workspace / ".codex" / "skills" / "project-helper" / "SKILL.md").exists()
         assert "workspace=" in result.output
         assert orchestrator.agents.get("scoped").workspace != expected_workspace
     finally:

@@ -26,7 +26,8 @@ class OpenAICompatibleProvider(AgentProvider):
         if not self.api_key:
             raise RuntimeError(f"An API key is required for the {self.name} provider")
 
-        messages = [{"role": "system", "content": request.agent.system_prompt or request.agent.role}]
+        system_prompt = request.agent.system_prompt or request.agent.role
+        messages = [{"role": "system", "content": system_prompt}]
         messages.extend({"role": "assistant", "content": item} for item in request.context)
         messages.append({"role": "user", "content": request.input})
 

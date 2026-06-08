@@ -3,15 +3,24 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from hashlib import sha256
 from pathlib import Path
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
 from pocketStudio.core.json_store import read_json_object, write_json_object
-from pocketStudio.models import Agent, AgentCreate
+from pocketStudio.models import Agent, AgentCreate, Team
 
 
-BUILTIN_AGENT_INSTRUCTIONS = """# pocketStudio Agent
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_BUILTIN_AGENT_INSTRUCTIONS_PATH = _REPO_ROOT / "AGENTS.md"
+
+
+def _load_builtin_agent_instructions() -> str:
+    try:
+        return _BUILTIN_AGENT_INSTRUCTIONS_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return """# pocketStudio Agent
 
 You are an autonomous teammate inside pocketStudio.
 
@@ -27,10 +36,15 @@ Use your workspace files carefully. Keep useful long-term notes in `memory/`.
 """
 
 
+BUILTIN_AGENT_INSTRUCTIONS = _load_builtin_agent_instructions()
+BUILTIN_AGENT_INSTRUCTIONS_HASH = sha256(BUILTIN_AGENT_INSTRUCTIONS.encode("utf-8")).hexdigest()
+
+
 class AgentService:
     def __init__(self, db: Database, settings: Settings) -> None:
         self.db = db
         self.settings = settings
+        self._system_prompt_cache: dict[str, tuple[str, str]] = {}
 
     def create(self, payload: AgentCreate) -> Agent:
         workspace = payload.workspace or self.settings.workspace_path / payload.id
@@ -167,23 +181,102 @@ class AgentService:
             )
         return self.get_heartbeat_file(agent_id)
 
-    def build_system_prompt(self, agent_id: str, teammates: str = "") -> str:
+    def build_teammate_block(self, agent_id: str, teams: list[Team]) -> str:
+        if not teams:
+            return ""
+
+        blocks: list[str] = []
+        try:
+            agent = self.get(agent_id)
+        except KeyError:
+            return ""
+
+        is_leader_of_any = any(team.leader_agent == agent_id for team in teams)
+        self_line = f"- `@{agent_id}` — **{agent.name}** ({agent.model or agent.provider})"
+        if is_leader_of_any:
+            self_line += " *(team leader)*"
+        self_line += f"\n- Workspace: `{agent.workspace}`"
+        blocks.append("\n### You\n\n" + self_line)
+
+        for team in teams:
+            if agent_id not in team.agent_ids:
+                continue
+            member_lines: list[str] = []
+            for teammate_id in team.agent_ids:
+                if teammate_id == agent_id:
+                    continue
+                try:
+                    teammate = self.get(teammate_id)
+                except KeyError:
+                    continue
+                leader_tag = " *(team leader)*" if teammate_id == team.leader_agent else ""
+                member_lines.append(f"- `@{teammate_id}` — **{teammate.name}** ({teammate.model or teammate.provider}){leader_tag}")
+            blocks.append(
+                "\n### Team `#{} ` — {}".format(team.id, team.name).replace(" ` ", "`")
+                + ("\n\n" + "\n".join(member_lines) if member_lines else "\n\nNo other active teammates.")
+            )
+
+        return "\n".join(blocks).strip()
+
+    def build_system_prompt(
+        self,
+        agent_id: str,
+        teammates: str = "",
+        *,
+        config_system_prompt: str | None = None,
+        config_prompt_file: str | None = None,
+    ) -> str:
         agent = self.get(agent_id)
         self.ensure_workspace(agent.workspace)
-        prompt = BUILTIN_AGENT_INSTRUCTIONS
-        prompt = prompt.replace("<!-- TEAMMATES_START -->\n<!-- TEAMMATES_END -->", teammates.strip())
-        memory_index = self.load_memory_index(agent_id)
+        memory_index = self.load_memory_index(agent_id).strip()
         memory_block = (
             f"\n{memory_index}\n\nTo read a memory in detail, open the file under `memory/`."
             if memory_index
             else "\nNo memories yet. Use memory files to build long-term context.\n"
         )
-        prompt = prompt.replace("<!-- MEMORY_START -->\n<!-- MEMORY_END -->", memory_block)
-        file_prompt = self.get_system_prompt_file(agent_id)["content"].strip()
-        if file_prompt:
-            prompt += f"\n\n{file_prompt}"
-        if agent.system_prompt:
-            prompt += f"\n\n{agent.system_prompt}"
+        prompt = BUILTIN_AGENT_INSTRUCTIONS
+        prompt = self._inject_block(prompt, "<!-- TEAMMATES_START -->", "<!-- TEAMMATES_END -->", teammates.strip())
+        prompt = self._inject_block(prompt, "<!-- MEMORY_START -->", "<!-- MEMORY_END -->", memory_block)
+
+        workspace_prompt = self._read_optional_text(agent.workspace / "AGENTS.md").strip()
+        soul_prompt = self._read_optional_text(agent.workspace / ".pocketStudio" / "SOUL.md").strip()
+        custom_prompt = workspace_prompt or agent.system_prompt.strip()
+        config_prompt = ""
+        if config_prompt_file:
+            config_prompt = self._read_optional_text(Path(config_prompt_file)).strip()
+        elif config_system_prompt:
+            config_prompt = config_system_prompt.strip()
+
+        extra_sections: list[str] = []
+        if soul_prompt:
+            extra_sections.append("## Operating Principles\n\n" + soul_prompt)
+        if custom_prompt:
+            extra_sections.append(custom_prompt)
+        if config_prompt:
+            extra_sections.append(config_prompt)
+        if extra_sections:
+            prompt += "\n\n" + "\n\n".join(extra_sections)
+
+        cache_input = json.dumps(
+            {
+                "agentId": agent_id,
+                "builtinHash": BUILTIN_AGENT_INSTRUCTIONS_HASH,
+                "teammates": teammates.strip(),
+                "memoryIndex": memory_index,
+                "soul": soul_prompt,
+                "workspacePrompt": workspace_prompt,
+                "agentPrompt": agent.system_prompt.strip(),
+                "configSystemPrompt": config_system_prompt.strip() if config_system_prompt else "",
+                "configPromptFile": config_prompt_file or "",
+                "configPromptContent": config_prompt,
+            },
+            sort_keys=True,
+        )
+        cache_hash = sha256(cache_input.encode("utf-8")).hexdigest()
+        cached = self._system_prompt_cache.get(agent_id)
+        if cached and cached[0] == cache_hash:
+            return cached[1]
+        self._system_prompt_cache[agent_id] = (cache_hash, prompt)
         return prompt
 
     def load_memory_index(self, agent_id: str) -> str:
@@ -370,6 +463,23 @@ class AgentService:
                 ok = path.is_symlink() or path.is_dir()
             result.append({"path": str(path), "relativePath": path.relative_to(workspace).as_posix() if path != workspace else ".", "kind": kind, "ok": ok})
         return result
+
+    @staticmethod
+    def _inject_block(prompt: str, start_marker: str, end_marker: str, block: str) -> str:
+        start_idx = prompt.find(start_marker)
+        end_idx = prompt.find(end_marker)
+        if start_idx == -1 or end_idx == -1 or end_idx < start_idx:
+            return prompt
+        return prompt[: start_idx + len(start_marker)] + ("\n" + block if block else "") + prompt[end_idx:]
+
+    @staticmethod
+    def _read_optional_text(path: Path) -> str:
+        if not path.exists() or not path.is_file():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
 
     @staticmethod
     def _safe_name(value: str) -> str:

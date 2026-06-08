@@ -103,7 +103,7 @@ class Orchestrator:
                 str(message.id),
                 sender=message.sender,
             )
-            run = await self._run_agent(agent, message.content, [], message_id=message.id)
+            run = await self._run_agent(agent, message.content, [], message_id=message.id, teams=self._teams_for_agent(agent.id))
             self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
             await self._handle_direct_agent_team_tags(agent, run, message)
             return OrchestrationResult(
@@ -147,7 +147,7 @@ class Orchestrator:
                     str(message.id),
                     sender=message.sender,
                 )
-            leader_run = await self._run_agent(leader, message.content, context, message_id=message.id)
+            leader_run = await self._run_agent(leader, message.content, context, message_id=message.id, teams=[team])
             leader_run_for_summary = leader_run
             runs.append(leader_run)
             self.queue.insert_agent_message(leader.id, "assistant", leader_run.output, str(message.id), sender=leader.id)
@@ -156,7 +156,7 @@ class Orchestrator:
 
             for agent in member_agents:
                 member_input = self._member_chain_input(team, message.content, leader_run, runs[1:], agent.id)
-                run = await self._run_agent(agent, member_input, context, message_id=message.id)
+                run = await self._run_agent(agent, member_input, context, message_id=message.id, teams=[team])
                 runs.append(run)
                 self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                 context.append(run.output)
@@ -165,7 +165,9 @@ class Orchestrator:
             output = runs[-1].output
         else:
             ordered_agents = self._order_agents_for_team(team, agents)
-            runs = await asyncio.gather(*(self._run_agent(agent, message.content, [], message_id=message.id) for agent in ordered_agents))
+            runs = await asyncio.gather(
+                *(self._run_agent(agent, message.content, [], message_id=message.id, teams=[team]) for agent in ordered_agents)
+            )
             for run in runs:
                 self.queue.insert_agent_message(
                     run.agent_id,
@@ -200,7 +202,13 @@ class Orchestrator:
                 str(message.id),
                 sender=f"team:{team.id}",
             )
-            final_run = await self._run_agent(leader_agent_for_summary, summary_input, [run.output for run in runs], message_id=message.id)
+            final_run = await self._run_agent(
+                leader_agent_for_summary,
+                summary_input,
+                [run.output for run in runs],
+                message_id=message.id,
+                teams=[team],
+            )
             runs.append(final_run)
             self.queue.insert_agent_message(
                 leader_agent_for_summary.id,
@@ -299,6 +307,7 @@ class Orchestrator:
                 message_id=payload.get("message_id"),
                 session_id=payload.get("session_id"),
                 run_id=payload.get("run_id"),
+                teams=payload.get("teams"),
             )
 
         return RunnableLambda(run_agent)
@@ -342,7 +351,7 @@ class Orchestrator:
                 context = [state["outputs"][source] for source in predecessors[node.id] if source in state["outputs"]]
                 if node.type == "agent" and agent is not None and runnable is not None:
                     self.queue.insert_agent_message(agent.id, "user", input_text, str(message.id), sender=f"workflow:{workflow_id}")
-                    run = await runnable.ainvoke({"input": input_text, "context": context})
+                    run = await runnable.ainvoke({"input": input_text, "context": context, "teams": [team]})
                     self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                     await self._handle_team_tags(team, run, message, agents, enqueue_mentions=team.max_rounds <= 1)
                 elif node.type == "start":
@@ -496,7 +505,13 @@ class Orchestrator:
                 seen_pairs.add(pair)
                 agent = agent_by_id[to_agent]
                 self.queue.insert_agent_message(agent.id, "user", content, str(message.id), sender=f"team:{team.id}:{from_agent}")
-                run = await self._run_agent(agent, content, [existing.output for existing in seed_runs + produced], message_id=message.id)
+                run = await self._run_agent(
+                    agent,
+                    content,
+                    [existing.output for existing in seed_runs + produced],
+                    message_id=message.id,
+                    teams=[team],
+                )
                 produced.append(run)
                 self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                 await self._handle_team_tags(team, run, message, agents, enqueue_mentions=False)
@@ -732,6 +747,7 @@ class Orchestrator:
         message_id: int | str | None = None,
         session_id: str | None = None,
         run_id: str | None = None,
+        teams: list[Team] | None = None,
     ) -> AgentRun:
         if not agent.enabled:
             raise ValueError(f"Agent '{agent.id}' is disabled")
@@ -767,7 +783,15 @@ class Orchestrator:
             }
             self.events.emit("agent.progress", normalized_payload)
 
-        response = await provider.run(ProviderRequest(agent=agent, input=input_text, context=context, progress=progress))
+        active_teams = teams if teams is not None else self._teams_for_agent(agent.id)
+        system_prompt = self.agents.build_system_prompt(
+            agent.id,
+            teammates=self.agents.build_teammate_block(agent.id, active_teams),
+        )
+        runtime_agent = agent.model_copy(update={"system_prompt": system_prompt})
+        response = await provider.run(
+            ProviderRequest(agent=runtime_agent, input=input_text, context=context, progress=progress)
+        )
         process = (response.raw or {}).get("process") if response.raw else None
         if process:
             self.events.emit(
