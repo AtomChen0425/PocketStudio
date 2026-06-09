@@ -47,7 +47,7 @@ def office_events(
 
 
 def _sse_message(event_name: str, data: dict) -> str:
-    return f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
+    return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.get("/events/stream", include_in_schema=False)

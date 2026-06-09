@@ -565,16 +565,19 @@ def all_agent_messages(
 
 
 @router.post("/agents/{agent_id}/reset")
-def reset_agent_runtime(
+async def reset_agent_runtime(
     agent_id: str,
     agents: AgentService = Depends(get_agent_service),
     queue: QueueService = Depends(get_queue_service),
+    orchestrator: Orchestrator = Depends(get_orchestrator),
 ) -> dict:
     try:
         agents.get(agent_id)
     except KeyError as exc:
         raise not_found(exc) from exc
-    return {"ok": True, "agentId": agent_id, "cleared": queue.reset_agent(agent_id)}
+    cleared = queue.reset_agent(agent_id)
+    result = await orchestrator.reset_agent_session(agent_id, cleared=cleared)
+    return {"ok": True, **result}
 
 
 @router.get("/plugins")

@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { subscribeToEvents, type EventData } from "@/lib/api";
+import { subscribeToEvents, type EventData, type OfficeEvent } from "@/lib/api";
 import { AGENT_SESSION_RELEASE_MS, extractTargets, type AgentWorkSession, type LiveBubble } from "./types";
 
 export function useOfficeSse() {
   const [bubbles, setBubbles] = useState<LiveBubble[]>([]);
+  const [runtimeEvents, setRuntimeEvents] = useState<OfficeEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [clock, setClock] = useState({ now: Date.now(), frame: 0 });
   const [agentWorkSessions, setAgentWorkSessions] = useState<Record<string, AgentWorkSession>>({});
@@ -14,16 +15,12 @@ export function useOfficeSse() {
   const rootSessionsRef = useRef(new Map<string, { startedAt: number; agentIds: Set<string>; completedAt?: number }>());
   const openRootOrderRef = useRef<string[]>([]);
 
-  // ── Clock tick ──────────────────────────────────────────────────────────
-
   useEffect(() => {
     const interval = window.setInterval(() => {
       setClock((current) => ({ now: Date.now(), frame: current.frame + 1 }));
     }, 120);
     return () => window.clearInterval(interval);
   }, []);
-
-  // ── Work session cleanup ────────────────────────────────────────────────
 
   useEffect(() => {
     setAgentWorkSessions((current) => {
@@ -39,8 +36,6 @@ export function useOfficeSse() {
       return changed ? next : current;
     });
   }, [clock.now]);
-
-  // ── SSE subscription ───────────────────────────────────────────────────
 
   useEffect(() => {
     const latestOpenRootId = () => {
@@ -75,6 +70,38 @@ export function useOfficeSse() {
       });
     };
 
+    const appendRuntimeEvent = (event: EventData, messageId?: string) => {
+      const payload = event as Record<string, unknown>;
+      const normalized: OfficeEvent = {
+        ...payload,
+        type: event.type,
+        timestamp: event.timestamp,
+        eventId: typeof payload.eventId === "number" ? payload.eventId : undefined,
+        messageId:
+          messageId ||
+          (typeof payload.messageId === "string" ? payload.messageId : undefined) ||
+          (typeof payload.message_id === "string" ? payload.message_id : undefined),
+        agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,
+        runId: typeof payload.runId === "string" ? payload.runId : undefined,
+        sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
+      };
+
+      setRuntimeEvents((current) => {
+        const fingerprint = `${normalized.eventId ?? ""}:${normalized.type}:${normalized.timestamp}:${normalized.messageId ?? ""}:${normalized.agentId ?? ""}:${normalized.runId ?? ""}:${normalized.sessionId ?? ""}`;
+        if (
+          current.some(
+            (entry) =>
+              `${entry.eventId ?? ""}:${entry.type}:${entry.timestamp}:${entry.messageId ?? ""}:${entry.agentId ?? ""}:${entry.runId ?? ""}:${entry.sessionId ?? ""}` ===
+              fingerprint,
+          )
+        ) {
+          return current;
+        }
+        const next = [...current, normalized];
+        return next.length > 200 ? next.slice(-200) : next;
+      });
+    };
+
     const unsubscribe = subscribeToEvents(
       (event: EventData) => {
         setConnected(true);
@@ -93,7 +120,9 @@ export function useOfficeSse() {
           const message = (payload.message as string) || "";
           const sender = (payload.sender as string) || "User";
           const messageId = payload.messageId ? String(payload.messageId) : undefined;
+          const target = payload.target ? String(payload.target) : "";
           if (!message) return;
+          appendRuntimeEvent(event, messageId);
 
           if (messageId) {
             rootSessionsRef.current.set(messageId, {
@@ -111,10 +140,34 @@ export function useOfficeSse() {
                 agentId: `_user_${sender}`,
                 message,
                 timestamp: event.timestamp,
-                targetAgents: extractTargets(message),
+                targetAgents: target ? extractTargets(target) : extractTargets(message),
+                messageId,
               },
             ].slice(-80),
           );
+        }
+
+        if (event.type === "message:processing" || event.type === "message:failed" || event.type === "message:done") {
+          appendRuntimeEvent(event, payload.messageId ? String(payload.messageId) : undefined);
+        }
+
+        if (event.type === "response:queued" || event.type === "chat:posted" || event.type === "team:chatroom") {
+          appendRuntimeEvent(event, payload.messageId ? String(payload.messageId) : undefined);
+        }
+
+        if (
+          event.type === "agent:invoke" ||
+          event.type === "agent:progress" ||
+          event.type === "agent:stdout" ||
+          event.type === "agent:stderr" ||
+          event.type === "agent:tool_call" ||
+          event.type === "agent:tool_result"
+        ) {
+          appendRuntimeEvent(
+            event,
+            payload.messageId ? String(payload.messageId) : payload.sessionId ? String(payload.sessionId) : latestOpenRootId() || undefined,
+          );
+          if (agentId) attachAgentToLatestRoot(agentId, event.timestamp);
         }
 
         if (event.type === "agent:invoke" && agentId) {
@@ -124,11 +177,17 @@ export function useOfficeSse() {
         if (event.type === "agent:mention") {
           const toAgent = payload.toAgent ? String(payload.toAgent) : undefined;
           const fromAgent = payload.fromAgent ? String(payload.fromAgent) : undefined;
+          appendRuntimeEvent(event, latestOpenRootId() || undefined);
           if (fromAgent) attachAgentToLatestRoot(fromAgent, event.timestamp);
           if (toAgent) attachAgentToLatestRoot(toAgent, event.timestamp);
         }
 
         if (event.type === "agent:response" && agentId) {
+          const responseMessageId = payload.messageId ? String(payload.messageId) : latestOpenRootId() || undefined;
+          appendRuntimeEvent(
+            event,
+            responseMessageId || (payload.sessionId ? String(payload.sessionId) : undefined),
+          );
           attachAgentToLatestRoot(agentId, event.timestamp);
           const message = (payload.content as string) || "";
           if (!message) return;
@@ -141,6 +200,9 @@ export function useOfficeSse() {
                 message,
                 timestamp: event.timestamp,
                 targetAgents: extractTargets(message),
+                messageId: responseMessageId,
+                runId: payload.runId ? String(payload.runId) : undefined,
+                sessionId: payload.sessionId ? String(payload.sessionId) : undefined,
               },
             ].slice(-80),
           );
@@ -172,8 +234,6 @@ export function useOfficeSse() {
     return unsubscribe;
   }, []);
 
-  // ── Bubble expiry ──────────────────────────────────────────────────────
-
   useEffect(() => {
     const interval = window.setInterval(() => {
       const cutoff = Date.now() - 180000;
@@ -182,5 +242,5 @@ export function useOfficeSse() {
     return () => window.clearInterval(interval);
   }, []);
 
-  return { bubbles, connected, clock, agentWorkSessions };
+  return { bubbles, runtimeEvents, connected, clock, agentWorkSessions };
 }

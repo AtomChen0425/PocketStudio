@@ -9,6 +9,9 @@ export type LiveBubble = {
   message: string;
   timestamp: number;
   targetAgents: string[];
+  messageId?: string;
+  runId?: string;
+  sessionId?: string;
 };
 
 export type TeamGroup = {
@@ -46,6 +49,25 @@ export type ConversationEntry = {
   message: string;
   targetAgents: string[];
   sourceOrder: number;
+  messageId?: string;
+  runId?: string;
+  sessionId?: string;
+};
+
+export type AgentExecutionRunStatus = "running" | "completed" | "failed";
+
+export type AgentExecutionRun = {
+  key: string;
+  agentId?: string;
+  messageId?: string;
+  runId?: string;
+  sessionId?: string;
+  status: AgentExecutionRunStatus;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  summary: string;
+  events: import("@/lib/api").OfficeEvent[];
 };
 
 export type AgentWorkSession = {
@@ -61,11 +83,12 @@ export const AGENT_SESSION_RELEASE_MS = 6200;
 export const OFFICE_STATION_COUNT = 8;
 export const ARCHIVE_BUTTONS = [
   { id: "logs", label: "Logs" },
+  { id: "runtime", label: "Runtime" },
   { id: "outgoing", label: "Ongoing Dock" },
   { id: "tasks", label: "Task Board" },
   { id: "routing", label: "Live Routing" },
 ] as const satisfies ReadonlyArray<{
-  id: "logs" | "outgoing" | "tasks" | "routing";
+  id: "logs" | "runtime" | "outgoing" | "tasks" | "routing";
   label: string;
 }>;
 
@@ -96,14 +119,12 @@ export function trimText(text: string, maxLength: number) {
 
 export function extractTargets(message: string) {
   const targets: string[] = [];
-  const directTeam = message.match(/^@team:(\w[\w-]*)/);
+  const directTeam = message.match(/^@team:([a-zA-Z0-9_-]+)/);
   if (directTeam) targets.push(directTeam[1]);
+  const directAgent = message.match(/^@(?!team:)(?:agent:)?([a-zA-Z0-9_-]+)/);
+  if (directAgent && !targets.includes(directAgent[1])) targets.push(directAgent[1]);
   for (const match of message.matchAll(/\[@(\w[\w-]*?):/g)) {
     if (!targets.includes(match[1])) targets.push(match[1]);
-  }
-  if (targets.length === 0) {
-    const direct = message.match(/^@(?!team:)(\w[\w-]*)/);
-    if (direct) targets.push(direct[1]);
   }
   return targets;
 }
@@ -165,4 +186,13 @@ export function buildTeamGroups(
 
 export function responseSubtitle(response: ResponseData) {
   return response.agent ? `@${response.agent} -> ${response.channel}` : response.channel;
+}
+
+export function summarizeExecutionEvent(event: import("@/lib/api").OfficeEvent) {
+  if (typeof event.summary === "string" && event.summary.trim()) return event.summary;
+  if (typeof event.content === "string" && event.content.trim()) return event.content.slice(0, 180);
+  if (typeof event.error === "string" && event.error.trim()) return event.error.slice(0, 180);
+  if (typeof event.providerEventType === "string" && event.providerEventType.trim()) return event.providerEventType;
+  if (typeof event.tool === "string" && event.tool.trim()) return `tool ${event.tool}`;
+  return event.type;
 }

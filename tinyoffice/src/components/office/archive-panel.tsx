@@ -1,12 +1,15 @@
-import type { AgentConfig, Settings } from "@/lib/api";
+import type { AgentConfig, OfficeEvent, Settings } from "@/lib/api";
 import type { SceneResponseItem, SceneRouteTarget, SceneTaskSummary } from "./pixel-office-scene";
+import { RuntimeEventsPanel } from "./runtime-events-panel";
+import { decodeUnicodeEscapes } from "@/lib/text";
 
-export type ArchivePanelId = "logs" | "workspace" | "outgoing" | "routing" | "tasks";
+export type ArchivePanelId = "logs" | "runtime" | "workspace" | "outgoing" | "routing" | "tasks";
 
 type ArchivePanelProps = {
   panel: ArchivePanelId;
   onClose: () => void;
   logs: { lines: string[] } | null;
+  runtimeEvents: OfficeEvent[];
   settings: Settings | null;
   agentEntries: [string, AgentConfig][];
   taskSummaries: SceneTaskSummary[];
@@ -19,6 +22,7 @@ export function ArchivePanel({
   panel,
   onClose,
   logs,
+  runtimeEvents,
   settings,
   agentEntries,
   taskSummaries,
@@ -31,6 +35,7 @@ export function ArchivePanel({
       <div className="flex items-center justify-between border-b border-stone-800 px-4 py-3">
         <div className="font-mono text-xs uppercase tracking-[0.18em] text-lime-300">
           {panel === "logs" && "Logs"}
+          {panel === "runtime" && "Runtime"}
           {panel === "workspace" && "Workspace"}
           {panel === "tasks" && "Task Board"}
           {panel === "outgoing" && "Outgoing Dock"}
@@ -50,13 +55,17 @@ export function ArchivePanel({
             {(logs?.lines ?? []).length > 0 ? (
               (logs?.lines ?? []).map((line, index) => (
                 <div key={`${index}-${line.slice(0, 12)}`} className="border border-stone-800 bg-stone-900/90 px-3 py-2 break-words">
-                  {line}
+                  {decodeUnicodeEscapes(line)}
                 </div>
               ))
             ) : (
               <div className="border border-stone-800 bg-stone-900/90 px-3 py-2 text-stone-500">No logs yet</div>
             )}
           </div>
+        )}
+
+        {panel === "runtime" && (
+          <RuntimeEventsPanel events={runtimeEvents} agentEntries={agentEntries} />
         )}
 
         {panel === "workspace" && (

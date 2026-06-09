@@ -15,6 +15,19 @@ export default function OfficePage() {
   const data = useOfficeData();
   const sse = useOfficeSse();
   const scene = useSceneLayout({ ...data, ...sse });
+  const runtimeEvents = [...(data.runtimeEvents ?? []), ...(sse.runtimeEvents ?? [])]
+    .filter((event, index, array) => {
+      const key = `${event.eventId ?? ""}:${event.type}:${event.timestamp}:${event.messageId ?? ""}:${event.agentId ?? ""}:${event.runId ?? ""}:${event.sessionId ?? ""}`;
+      return (
+        array.findIndex(
+          (candidate) =>
+            `${candidate.eventId ?? ""}:${candidate.type}:${candidate.timestamp}:${candidate.messageId ?? ""}:${candidate.agentId ?? ""}:${candidate.runId ?? ""}:${candidate.sessionId ?? ""}` ===
+            key,
+        ) === index
+      );
+    })
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .slice(-200);
 
   const [archivePanel, setArchivePanel] = useState<ArchivePanelId | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -66,6 +79,7 @@ export default function OfficePage() {
               panel={archivePanel}
               onClose={() => setArchivePanel(null)}
               logs={data.logs}
+              runtimeEvents={runtimeEvents}
               settings={data.settings}
               agentEntries={scene.agentEntries}
               taskSummaries={scene.taskSummaries}
@@ -81,6 +95,7 @@ export default function OfficePage() {
             agentEntries={scene.agentEntries}
             agentHistories={data.agentHistories}
             bubbles={sse.bubbles}
+            runtimeEvents={runtimeEvents}
             selectedAgentId={selectedAgentId}
           />
 

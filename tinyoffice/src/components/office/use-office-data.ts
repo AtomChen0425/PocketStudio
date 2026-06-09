@@ -5,6 +5,7 @@ import {
   getAgentMessages,
   getAgents,
   getLogs,
+  getOfficeEvents,
   getQueueStatus,
   getResponses,
   getSettings,
@@ -12,6 +13,7 @@ import {
   getTeams,
   type AgentConfig,
   type AgentMessage,
+  type OfficeEvent,
   type QueueStatus,
   type ResponseData,
   type Settings,
@@ -27,6 +29,7 @@ export function useOfficeData() {
   const { data: responses } = usePolling<ResponseData[]>(() => getResponses(6), 4000);
   const { data: settings } = usePolling<Settings>(getSettings, 10000);
   const { data: logs } = usePolling<{ lines: string[] }>(() => getLogs(40), 5000);
+  const { data: runtimeEvents } = usePolling<OfficeEvent[]>(() => getOfficeEvents(200), 5000);
   const { data: agentHistories } = usePolling<Record<string, AgentMessage[]>>(
     async () => {
       if (!agents) return {};
@@ -39,5 +42,5 @@ export function useOfficeData() {
     [agents],
   );
 
-  return { agents, teams, tasks, queueStatus, responses, settings, logs, agentHistories };
+  return { agents, teams, tasks, queueStatus, responses, settings, logs, runtimeEvents, agentHistories };
 }

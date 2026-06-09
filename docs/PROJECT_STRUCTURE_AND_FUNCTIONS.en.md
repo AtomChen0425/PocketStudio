@@ -821,10 +821,10 @@ Class, data model, service object, or exception type.
 | Method | Usage |
 |---|---|
 | `__init__(self, command: str, registry: ProcessRegistry \| None=None, timeout_seconds: int=600)` | Python object lifecycle or protocol method. |
-| `async run(self, args: Sequence[str], process_key: str, cwd: Path \| str \| None=None, env: dict[str, str] \| None=None, on_stdout_line: Callable[[str], None] \| None=None, stdin_text: str \| None=None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `async run(self, args: Sequence[str], process_key: str, cwd: Path \| str \| None=None, env: dict[str, str] \| None=None, on_stdout_line: Callable[[str], None] \| None=None, on_stderr_line: Callable[[str], None] \| None=None, stdin_text: str \| None=None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _run_windows_powershell(self, command: str, args: Sequence[str], cwd: Path \| str \| None, env: dict[str, str], stdin_text: str \| None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
-| `async _run_windows_powershell_sync(self, command: str, args: Sequence[str], cwd: Path \| str \| None, env: dict[str, str], on_stdout_line: Callable[[str], None] \| None, stdin_text: str \| None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
-| `async _communicate(process: asyncio.subprocess.Process, on_stdout_line: Callable[[str], None] \| None, stdin_text: str \| None=None)` | Helper method for its service or type. |
+| `async _run_windows_powershell_sync(self, command: str, args: Sequence[str], cwd: Path \| str \| None, env: dict[str, str], on_stdout_line: Callable[[str], None] \| None, on_stderr_line: Callable[[str], None] \| None, stdin_text: str \| None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `async _communicate(process: asyncio.subprocess.Process, on_stdout_line: Callable[[str], None] \| None, on_stderr_line: Callable[[str], None] \| None, stdin_text: str \| None=None)` | Helper method for its service or type. |
 
 ### `pocketStudio/services/agent_service.py`
 
@@ -937,6 +937,9 @@ Class, data model, service object, or exception type.
 | `log_lines(self, limit: int=100)` | Helper method for its service or type. |
 | `log_records(self, limit: int=100, event_type: str \| None=None, contains: str \| None=None)` | Helper method for its service or type. |
 | `office_event(self, event: Event)` | Helper method for its service or type. |
+| `_office_base(event: Event, payload: dict, timestamp: int)` | Helper method for its service or type. |
+| `_str_payload(payload: dict, *keys: str)` | Builds API or compatibility-layer response/request payloads. |
+| `_agent_progress_type(payload: dict)` | Helper method for its service or type. |
 | `_append_log(self, event_type: str, payload_json: str, created_at: str \| None=None)` | Helper method for its service or type. |
 | `_notify(self, event: Event)` | Helper method for its service or type. |
 | `_parse_log_line(line: str)` | Converts, parses, or formats internal data. |
@@ -1002,6 +1005,7 @@ Class, data model, service object, or exception type.
 | `_compile_workflow_routing_function(node)` | Helper method for its service or type. |
 | `_route_from_output(output: str, conditions: list[str])` | Helper method for its service or type. |
 | `async _run_iterative_rounds(self, team: Team, message: QueueMessage, agents: list[Agent], seed_runs: list[AgentRun], max_rounds: int)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `_agent_lookup(agents: list[Agent])` | Helper method for its service or type. |
 | `_mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent])` | Helper method for its service or type. |
 | `_member_chain_input(self, team: Team, original_request: str, leader_run: AgentRun, previous_member_runs: list[AgentRun], member_id: str)` | Helper method for its service or type. |
 | `_leader_summary_input(self, team: Team, original_request: str, leader_run: AgentRun, member_runs: list[AgentRun])` | Helper method for its service or type. |
@@ -1016,10 +1020,7 @@ Class, data model, service object, or exception type.
 | `_teams_for_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `_resolve_team_context_for_agent(agent_id: str, teams: list[Team])` | Helper method for its service or type. |
 | `_resolve_team_for_tag(team_id: str, teams: list[Team], agent_id: str)` | Helper method for its service or type. |
-| `_agent_lookup(agents: list[Agent])` | Helper method for its service or type. |
-| `_extract_tags(text: str, prefix: str)` | Converts, parses, or formats internal data. |
-| `_strip_tags(text: str, prefix: str)` | Converts, parses, or formats internal data. |
-| `async _run_agent(self, agent: Agent, input_text: str, context: list[str])` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `async _run_agent(self, agent: Agent, input_text: str, context: list[str], *, message_id: int \| str \| None=None, session_id: str \| None=None, run_id: str \| None=None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_agent_for_message(self, agent_id: str, message: QueueMessage)` | Helper method for its service or type. |
 | `_parse_target(target: str)` | Converts, parses, or formats internal data. |
 | `decode_result(message: QueueMessage)` | Converts, parses, or formats internal data. |

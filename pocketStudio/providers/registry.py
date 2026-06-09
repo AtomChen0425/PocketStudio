@@ -92,6 +92,18 @@ class ProviderRegistry:
                 killed = True
         return killed
 
+    async def reset_agent(self, agent_id: str) -> bool:
+        reset = False
+        for provider in self._providers.values():
+            handler = getattr(provider, "reset_agent", None)
+            if handler and await handler(agent_id):
+                reset = True
+                continue
+            kill = getattr(provider, "kill_agent", None)
+            if kill and await kill(agent_id):
+                reset = True
+        return reset
+
     def agent_process_alive(self, agent_id: str) -> bool:
         return any(
             bool(is_alive(agent_id))

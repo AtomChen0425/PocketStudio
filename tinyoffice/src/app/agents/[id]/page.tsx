@@ -10,6 +10,7 @@ import {
   getAgentMemory,
   getAgentHeartbeat,
   saveAgentHeartbeat,
+  resetAgentSession,
   type AgentConfig,
   type WorkspaceSkill,
 } from "@/lib/api";
@@ -34,6 +35,7 @@ import {
   HeartPulse,
   CalendarDays,
   ArrowLeft,
+  RotateCcw,
 } from "lucide-react";
 
 const AGENT_COLORS = [
@@ -77,6 +79,9 @@ export default function AgentConfigPage({
   const [spSaved, setSpSaved] = useState(false);
   const [hbSaving, setHbSaving] = useState(false);
   const [hbSaved, setHbSaved] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
+  const [chatResetVersion, setChatResetVersion] = useState(0);
 
   // Workspace data
   const [workspaceSkills, setWorkspaceSkills] = useState<WorkspaceSkill[]>([]);
@@ -174,6 +179,25 @@ export default function AgentConfigPage({
     }
   }, [agent, agentId, heartbeatContent, heartbeatEnabled, heartbeatInterval]);
 
+  const handleResetSession = useCallback(async () => {
+    if (!agent || resetting) return;
+    const confirmed = window.confirm(
+      `Clear the current session for @${agentId}? This will remove queued agent history and force the next run to start a fresh provider session.`,
+    );
+    if (!confirmed) return;
+    setResetting(true);
+    try {
+      await resetAgentSession(agentId);
+      setChatResetVersion((value) => value + 1);
+      setResetDone(true);
+      window.setTimeout(() => setResetDone(false), 2000);
+    } catch {
+      // Error handling
+    } finally {
+      setResetting(false);
+    }
+  }, [agent, agentId, resetting]);
+
   const refreshWorkspaceData = useCallback(() => {
     getAgentSkills(agentId)
       .then(setWorkspaceSkills)
@@ -248,6 +272,18 @@ export default function AgentConfigPage({
             </div>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleResetSession}
+            disabled={resetting}
+            className="gap-2"
+          >
+            <RotateCcw className={`h-3.5 w-3.5 ${resetting ? "animate-spin" : ""}`} />
+            {resetDone ? "Session cleared" : resetting ? "Resetting..." : "Reset session"}
+          </Button>
+        </div>
 
       </div>
 
@@ -287,7 +323,7 @@ export default function AgentConfigPage({
       <div className="flex-1 overflow-auto">
         {activeTab === "chat" && (
           <div className="h-full min-h-0">
-            <AgentChatView agentId={agentId} agentName={agent.name} />
+            <AgentChatView key={`${agentId}-${chatResetVersion}`} agentId={agentId} agentName={agent.name} />
           </div>
         )}
         {activeTab === "skills" && (

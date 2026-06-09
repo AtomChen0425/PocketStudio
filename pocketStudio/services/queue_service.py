@@ -38,7 +38,7 @@ class QueueService:
             content = hooked.text
         cursor = self.db.execute(
             "INSERT INTO messages (target, content, sender, metadata) VALUES (?, ?, ?, ?)",
-            (payload.target, content, payload.sender, json.dumps(payload.metadata)),
+            (payload.target, content, payload.sender, json.dumps(payload.metadata, ensure_ascii=False)),
         )
         message = self.get(cursor.lastrowid)
         self.events.emit(
@@ -425,8 +425,8 @@ class QueueService:
                 message,
                 original_message,
                 agent,
-                json.dumps(files or []),
-                json.dumps(metadata or {}),
+                json.dumps(files or [], ensure_ascii=False),
+                json.dumps(metadata or {}, ensure_ascii=False),
                 int(time.time() * 1000),
             ),
         )

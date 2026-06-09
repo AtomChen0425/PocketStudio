@@ -30,15 +30,37 @@ class CliAgentProvider(AgentProvider):
 
         def on_line(line: str) -> None:
             nonlocal output
+            if request.progress is not None and line.strip():
+                request.progress(
+                    {
+                        "providerEventType": "stdout",
+                        "summary": line[:240],
+                        "content": line,
+                        "raw": {"line": line, "stream": "stdout"},
+                    }
+                )
             text = self._extract_event_text(line)
             if text:
                 output = text
+
+        def on_stderr_line(line: str) -> None:
+            if request.progress is None or not line.strip():
+                return
+            request.progress(
+                {
+                    "providerEventType": "stderr",
+                    "summary": line[:240],
+                    "content": line,
+                    "raw": {"line": line, "stream": "stderr"},
+                }
+            )
 
         result = await self.harness.run(
             self._args(request),
             process_key=request.agent.id,
             cwd=request.agent.workspace,
             on_stdout_line=on_line,
+            on_stderr_line=on_stderr_line,
         )
         if result.return_code != 0:
             raise RuntimeError(f"{self.command} exited with {result.return_code}: {result.stderr.strip()}")
@@ -104,6 +126,9 @@ class CliAgentProvider(AgentProvider):
 
     def is_alive(self, agent_id: str) -> bool:
         return self.harness.registry.is_alive(agent_id)
+
+    async def reset_agent(self, agent_id: str) -> bool:
+        return await self.harness.registry.kill(agent_id)
 
     async def kill_agent(self, agent_id: str) -> bool:
         return await self.harness.registry.kill(agent_id)

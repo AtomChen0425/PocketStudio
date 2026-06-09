@@ -37,15 +37,37 @@ class CodexProvider(AgentProvider):
             event = self._parse_event(line)
             if event is not None and request.progress is not None:
                 request.progress(self._progress_payload(event))
+            elif request.progress is not None and line.strip():
+                request.progress(
+                    {
+                        "providerEventType": "stdout",
+                        "summary": line[:240],
+                        "content": line,
+                        "raw": {"line": line, "stream": "stdout"},
+                    }
+                )
             text = self._extract_event_text_from_event(event) if event is not None else None
             if text:
                 output = text
+
+        def on_stderr_line(line: str) -> None:
+            if request.progress is None or not line.strip():
+                return
+            request.progress(
+                {
+                    "providerEventType": "stderr",
+                    "summary": line[:240],
+                    "content": line,
+                    "raw": {"line": line, "stream": "stderr"},
+                }
+            )
 
         result = await self.harness.run(
             args,
             process_key=request.agent.id,
             cwd=request.agent.workspace,
             on_stdout_line=on_line,
+            on_stderr_line=on_stderr_line,
             stdin_text=stdin_text,
         )
         if result.return_code != 0:
@@ -202,6 +224,9 @@ class CodexProvider(AgentProvider):
 
     def is_alive(self, agent_id: str) -> bool:
         return self.harness.registry.is_alive(agent_id)
+
+    async def reset_agent(self, agent_id: str) -> bool:
+        return await self.harness.registry.kill(agent_id)
 
     async def kill_agent(self, agent_id: str) -> bool:
         return await self.harness.registry.kill(agent_id)
