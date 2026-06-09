@@ -87,6 +87,22 @@ class SystemPromptRecordingProvider(AgentProvider):
         return ProviderResponse(text=request.agent.system_prompt or "missing system prompt")
 
 
+class ResetRecordingProvider(AgentProvider):
+    name = "reset-recording"
+
+    def __init__(self) -> None:
+        self.reset_calls: list[str] = []
+        self.run_reset_flags: list[bool] = []
+
+    async def reset_agent(self, agent_id: str) -> bool:
+        self.reset_calls.append(agent_id)
+        return True
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        self.run_reset_flags.append(request.reset)
+        return ProviderResponse(text=f"reset={request.reset}")
+
+
 class WorkflowRecordingProvider(AgentProvider):
     name = "workflow-recording"
 
@@ -181,6 +197,33 @@ def test_direct_agent_run_uses_full_system_prompt() -> None:
         assert "### Team `#dev`" in prompt
         assert "Always answer in bullet points." in prompt
         assert "coder" in prompt
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_agent_session_reset_clears_provider_and_resets_next_run() -> None:
+    home = temp_home()
+    try:
+        orchestrator = build_orchestrator(home)
+        provider = ResetRecordingProvider()
+        orchestrator.providers.register(provider)
+        orchestrator.agents.create(AgentCreate(id="planner", name="Planner", role="Plans", provider="reset-recording"))
+
+        first = orchestrator.enqueue(MessageCreate(target="@agent:planner", content="First turn"))
+        asyncio.run(orchestrator.process_message(first.id))
+
+        reset = asyncio.run(orchestrator.reset_agent_session("planner"))
+        assert reset["agentId"] == "planner"
+        assert reset["nextRunReset"] is True
+        assert provider.reset_calls == ["planner"]
+
+        second = orchestrator.enqueue(MessageCreate(target="@agent:planner", content="Second turn"))
+        asyncio.run(orchestrator.process_message(second.id))
+
+        third = orchestrator.enqueue(MessageCreate(target="@agent:planner", content="Third turn"))
+        asyncio.run(orchestrator.process_message(third.id))
+
+        assert provider.run_reset_flags == [False, True, False]
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

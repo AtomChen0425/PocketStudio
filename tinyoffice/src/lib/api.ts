@@ -493,6 +493,19 @@ export async function saveAgentHeartbeat(agentId: string, data: { content?: stri
   });
 }
 
+export async function resetAgentSession(agentId: string): Promise<{
+  ok: boolean;
+  agentId: string;
+  cleared?: { messages?: number; responses?: number };
+  providerReset?: boolean;
+  nextRunReset?: boolean;
+}> {
+  return apiFetch(`/api/agents/${encodeURIComponent(agentId)}/reset`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 // ── Tasks ─────────────────────────────────────────────────────────────────
 
 export type TaskStatus = "backlog" | "todo" | "in_progress" | "review" | "done";

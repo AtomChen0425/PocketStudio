@@ -72,8 +72,35 @@ class Orchestrator:
         self.projects = projects
         self.workflows = workflows
         self._initialized_workspaces: set[str] = set()
+        self._reset_agents: set[str] = set()
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
         return self.queue.enqueue(payload)
+
+    async def reset_agent_session(
+        self,
+        agent_id: str,
+        *,
+        cleared: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        agent = self.agents.get(agent_id)
+        provider_reset = await self.providers.reset_agent(agent_id)
+        self._reset_agents.add(agent_id)
+        self.events.emit(
+            "agent.session.reset",
+            {
+                "agent_id": agent_id,
+                "provider": agent.provider,
+                "cleared": cleared,
+                "provider_reset": provider_reset,
+                "next_run_reset": True,
+            },
+        )
+        return {
+            "agentId": agent_id,
+            "cleared": cleared,
+            "providerReset": provider_reset,
+            "nextRunReset": True,
+        }
 
     async def process_one(self, newest: bool = False) -> OrchestrationResult | None:
         message = self.queue.next_queued(newest=newest)
@@ -789,8 +816,17 @@ class Orchestrator:
             teammates=self.agents.build_teammate_block(agent.id, active_teams),
         )
         runtime_agent = agent.model_copy(update={"system_prompt": system_prompt})
+        reset_session = agent.id in self._reset_agents
+        if reset_session:
+            self._reset_agents.discard(agent.id)
         response = await provider.run(
-            ProviderRequest(agent=runtime_agent, input=input_text, context=context, progress=progress)
+            ProviderRequest(
+                agent=runtime_agent,
+                input=input_text,
+                context=context,
+                reset=reset_session,
+                progress=progress,
+            )
         )
         process = (response.raw or {}).get("process") if response.raw else None
         if process:

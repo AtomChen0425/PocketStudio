@@ -127,6 +127,9 @@ class CliAgentProvider(AgentProvider):
     def is_alive(self, agent_id: str) -> bool:
         return self.harness.registry.is_alive(agent_id)
 
+    async def reset_agent(self, agent_id: str) -> bool:
+        return await self.harness.registry.kill(agent_id)
+
     async def kill_agent(self, agent_id: str) -> bool:
         return await self.harness.registry.kill(agent_id)
 

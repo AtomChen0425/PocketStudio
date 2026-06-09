@@ -28,6 +28,9 @@ class AgentProvider(ABC):
     def setup_workspace(self, workspace: Path) -> None:
         """Set up the workspace for the provider."""
         pass
+    async def reset_agent(self, agent_id: str) -> bool:
+        """Reset any provider-side session/process state for an agent."""
+        return False
     @abstractmethod
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         """Execute an agent turn."""
