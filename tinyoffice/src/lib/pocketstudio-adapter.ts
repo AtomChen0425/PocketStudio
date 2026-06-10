@@ -26,6 +26,10 @@ export type BackendTeam = {
   agent_ids: string[];
   leader_agent?: string;
   leaderAgent?: string;
+  max_rounds?: number;
+  maxRounds?: number;
+  stop_when_idle?: boolean;
+  stopWhenIdle?: boolean;
 };
 
 export type BackendQueueMessage = {
@@ -101,6 +105,7 @@ export function normalizeTeam(team: BackendTeam): TeamConfig {
     agents: team.agent_ids || [],
     leader_agent: team.leader_agent || team.leaderAgent || team.agent_ids?.[0] || "",
     mode: team.mode || "chain",
+    max_rounds: team.max_rounds ?? team.maxRounds ?? 1,
   };
 }
 

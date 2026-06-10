@@ -79,6 +79,7 @@ export interface TeamConfig {
   agents: string[];
   leader_agent: string;
   mode?: "chain" | "fanout" | "workflow";
+  max_rounds?: number;
 }
 
 export interface WorkflowNode {
@@ -357,6 +358,7 @@ export async function saveTeam(
       mode: team.mode || "chain",
       agent_ids: team.agents,
       leaderAgent: team.leader_agent || "",
+      maxRounds: team.max_rounds ?? 1,
     }),
   });
   return { ok: true, team: normalizeTeam(saved) };
