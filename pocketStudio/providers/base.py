@@ -13,7 +13,8 @@ class ProviderRequest(BaseModel):
 
     agent: Agent
     input: str
-    context: list[str] = []
+    context: list[str] = Field(default_factory=list)
+    additional_workspaces: list[Path] = Field(default_factory=list)
     reset: bool = False
     progress: Callable[[dict], None] | None = Field(default=None, exclude=True)
 
@@ -25,12 +26,19 @@ class ProviderResponse(BaseModel):
 
 class AgentProvider(ABC):
     name: str
+
     def setup_workspace(self, workspace: Path) -> None:
         """Set up the workspace for the provider."""
         pass
+
+    def workspace_args(self, request: ProviderRequest) -> list[str]:
+        """Return provider-specific CLI args for additional workspaces."""
+        return []
+
     async def reset_agent(self, agent_id: str) -> bool:
         """Reset any provider-side session/process state for an agent."""
         return False
+
     @abstractmethod
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         """Execute an agent turn."""

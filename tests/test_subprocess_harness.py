@@ -212,6 +212,36 @@ def test_codex_provider_can_reset_without_resume() -> None:
     assert "--last" not in fake.args
 
 
+def test_codex_provider_adds_additional_workspaces() -> None:
+    class FakeHarness:
+        async def run(self, args, process_key, cwd=None, env=None, on_stdout_line=None, stdin_text=None):
+            self.args = args
+            self.cwd = cwd
+            return type("Result", (), {"stdout": '{"result":"workspace output"}', "stderr": "", "return_code": 0, "process": {"pid": 123}})()
+
+    provider = CodexProvider()
+    fake = FakeHarness()
+    provider.harness = fake
+    agent = Agent(id="codex-agent", name="Codex Agent", role="Writes code", provider="codex", workspace=Path.cwd())
+    project_workspace = Path.cwd() / "project-root"
+
+    response = asyncio.run(
+        provider.run(
+            ProviderRequest(
+                agent=agent,
+                input="Do work",
+                additional_workspaces=[project_workspace],
+            )
+        )
+    )
+
+    assert response.text == "workspace output"
+    assert fake.cwd == Path.cwd()
+    assert "--add-dir" in fake.args
+    add_dir_index = fake.args.index("--add-dir")
+    assert fake.args[add_dir_index + 1] == str(project_workspace)
+
+
 def test_codex_provider_includes_context_and_supports_custom_command_line() -> None:
     class FakeHarness:
         def __init__(self) -> None:

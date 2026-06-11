@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import shlex
 from pathlib import Path
 
@@ -89,6 +90,7 @@ class CodexProvider(AgentProvider):
             return self._custom_args(request)
 
         args = ["exec"]
+        args.extend(self.workspace_args(request))
         if not request.reset:
             args.extend(["resume", "--last"])
         if request.agent.model:
@@ -101,9 +103,19 @@ class CodexProvider(AgentProvider):
         args.extend(["--json", "-"])
         return args, self._prompt(request)
 
+    def workspace_args(self, request: ProviderRequest) -> list[str]:
+        args: list[str] = []
+        for workspace in request.additional_workspaces:
+            args.extend(["--add-dir", str(workspace)])
+        return args
+
     def _custom_args(self, request: ProviderRequest) -> tuple[list[str], str | None]:
         prompt = self._prompt(request)
         args = [arg.replace("{prompt}", prompt) for arg in self.base_args or []]
+        workspace_args = self.workspace_args(request)
+        if workspace_args:
+            insert_at = 1 if args else 0
+            args[insert_at:insert_at] = workspace_args
         if not any("{prompt}" in arg for arg in self.base_args or []):
             args.append("-")
             return args, prompt
@@ -111,11 +123,11 @@ class CodexProvider(AgentProvider):
 
     def _prompt(self, request: ProviderRequest) -> str:
         chunks: list[str] = []
-        system_prompt = request.agent.system_prompt or request.agent.role
-        if system_prompt:
-            chunks.append(f"System instructions:\n{system_prompt}")
-        if request.context:
-            chunks.append("Context:\n" + "\n\n".join(request.context))
+        # system_prompt = request.agent.system_prompt or request.agent.role
+        # if system_prompt:
+        #     chunks.append(f"System instructions:\n{system_prompt}")
+        # if request.context:
+        #     chunks.append("Context:\n" + "\n\n".join(request.context))
         chunks.append(request.input)
         return "\n\n".join(chunks)
 

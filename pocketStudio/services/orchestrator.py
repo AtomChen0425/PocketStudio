@@ -5,6 +5,7 @@ import json
 import operator
 from uuid import uuid4
 from typing import Annotated, Any, TypedDict
+from pathlib import Path
 
 from pocketStudio.models import (
     Agent,
@@ -76,6 +77,12 @@ class Orchestrator:
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
         return self.queue.enqueue(payload)
 
+    def _project_workspace_for_message(self, message: QueueMessage) -> Path | None:
+        project_id = message.metadata.get("projectId") or message.metadata.get("project_id")
+        if not project_id or self.projects is None:
+            return None
+        return self.projects.project_agent_workspace(str(project_id), "")
+
     async def reset_agent_session(
         self,
         agent_id: str,
@@ -123,6 +130,7 @@ class Orchestrator:
         target_type, target_id = self._parse_target(message.target)
         if target_type == "agent":
             agent = self._agent_for_message(target_id, message)
+            project_workspace = self._project_workspace_for_message(message)
             self.queue.insert_agent_message(
                 agent.id,
                 "user",
@@ -130,7 +138,14 @@ class Orchestrator:
                 str(message.id),
                 sender=message.sender,
             )
-            run = await self._run_agent(agent, message.content, [], message_id=message.id, teams=self._teams_for_agent(agent.id))
+            run = await self._run_agent(
+                agent,
+                message.content,
+                [],
+                message_id=message.id,
+                teams=self._teams_for_agent(agent.id),
+                project_workspace=project_workspace,
+            )
             self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
             await self._handle_direct_agent_team_tags(agent, run, message)
             return OrchestrationResult(
@@ -163,6 +178,7 @@ class Orchestrator:
             ordered_agents = self._order_agents_for_team(team, agents)
             context: list[str] = []
             chatroom_origin = self._is_chatroom_origin(message)
+            project_workspace = self._project_workspace_for_message(message)
             leader = ordered_agents[0]
             leader_agent_for_summary = leader
             member_agents = ordered_agents[1:]
@@ -174,7 +190,14 @@ class Orchestrator:
                     str(message.id),
                     sender=message.sender,
                 )
-            leader_run = await self._run_agent(leader, message.content, context, message_id=message.id, teams=[team])
+            leader_run = await self._run_agent(
+                leader,
+                message.content,
+                context,
+                message_id=message.id,
+                teams=[team],
+                project_workspace=project_workspace,
+            )
             leader_run_for_summary = leader_run
             runs.append(leader_run)
             self.queue.insert_agent_message(leader.id, "assistant", leader_run.output, str(message.id), sender=leader.id)
@@ -183,7 +206,14 @@ class Orchestrator:
 
             for agent in member_agents:
                 member_input = self._member_chain_input(team, message.content, leader_run, runs[1:], agent.id)
-                run = await self._run_agent(agent, member_input, context, message_id=message.id, teams=[team])
+                run = await self._run_agent(
+                    agent,
+                    member_input,
+                    context,
+                    message_id=message.id,
+                    teams=[team],
+                    project_workspace=project_workspace,
+                )
                 runs.append(run)
                 self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                 context.append(run.output)
@@ -192,8 +222,19 @@ class Orchestrator:
             output = runs[-1].output
         else:
             ordered_agents = self._order_agents_for_team(team, agents)
+            project_workspace = self._project_workspace_for_message(message)
             runs = await asyncio.gather(
-                *(self._run_agent(agent, message.content, [], message_id=message.id, teams=[team]) for agent in ordered_agents)
+                *(
+                    self._run_agent(
+                        agent,
+                        message.content,
+                        [],
+                        message_id=message.id,
+                        teams=[team],
+                        project_workspace=project_workspace,
+                    )
+                    for agent in ordered_agents
+                )
             )
             for run in runs:
                 self.queue.insert_agent_message(
@@ -235,6 +276,7 @@ class Orchestrator:
                 [run.output for run in runs],
                 message_id=message.id,
                 teams=[team],
+                project_workspace=self._project_workspace_for_message(message),
             )
             runs.append(final_run)
             self.queue.insert_agent_message(
@@ -335,6 +377,7 @@ class Orchestrator:
                 session_id=payload.get("session_id"),
                 run_id=payload.get("run_id"),
                 teams=payload.get("teams"),
+                project_workspace=payload.get("project_workspace"),
             )
 
         return RunnableLambda(run_agent)
@@ -378,7 +421,14 @@ class Orchestrator:
                 context = [state["outputs"][source] for source in predecessors[node.id] if source in state["outputs"]]
                 if node.type == "agent" and agent is not None and runnable is not None:
                     self.queue.insert_agent_message(agent.id, "user", input_text, str(message.id), sender=f"workflow:{workflow_id}")
-                    run = await runnable.ainvoke({"input": input_text, "context": context, "teams": [team]})
+                    run = await runnable.ainvoke(
+                        {
+                            "input": input_text,
+                            "context": context,
+                            "teams": [team],
+                            "project_workspace": self._project_workspace_for_message(message),
+                        }
+                    )
                     self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                     await self._handle_team_tags(team, run, message, agents, enqueue_mentions=team.max_rounds <= 1)
                 elif node.type == "start":
@@ -538,6 +588,7 @@ class Orchestrator:
                     [existing.output for existing in seed_runs + produced],
                     message_id=message.id,
                     teams=[team],
+                    project_workspace=self._project_workspace_for_message(message),
                 )
                 produced.append(run)
                 self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
@@ -775,6 +826,7 @@ class Orchestrator:
         session_id: str | None = None,
         run_id: str | None = None,
         teams: list[Team] | None = None,
+        project_workspace: Path | None = None,
     ) -> AgentRun:
         if not agent.enabled:
             raise ValueError(f"Agent '{agent.id}' is disabled")
@@ -819,11 +871,13 @@ class Orchestrator:
         reset_session = agent.id in self._reset_agents
         if reset_session:
             self._reset_agents.discard(agent.id)
+        additional_workspaces = [project_workspace] if project_workspace is not None else []
         response = await provider.run(
             ProviderRequest(
                 agent=runtime_agent,
                 input=input_text,
                 context=context,
+                additional_workspaces=additional_workspaces,
                 reset=reset_session,
                 progress=progress,
             )
@@ -854,14 +908,7 @@ class Orchestrator:
         return AgentRun(agent_id=agent.id, input=input_text, output=response.text)
 
     def _agent_for_message(self, agent_id: str, message: QueueMessage) -> Agent:
-        agent = self.agents.get(agent_id)
-        project_id = message.metadata.get("projectId") or message.metadata.get("project_id")
-        if not project_id or self.projects is None:
-            return agent
-        workspace = self.projects.project_agent_workspace(str(project_id), agent.id)
-        if workspace is None:
-            return agent
-        return agent.model_copy(update={"workspace": workspace})
+        return self.agents.get(agent_id)
 
     @staticmethod
     def _parse_target(target: str) -> tuple[str, str]:
