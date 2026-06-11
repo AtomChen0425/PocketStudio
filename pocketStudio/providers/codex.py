@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import inspect
+import json
 import shlex
 from pathlib import Path
 
@@ -38,43 +38,44 @@ class CodexProvider(AgentProvider):
             event = self._parse_event(line)
             if event is not None and request.progress is not None:
                 request.progress(self._progress_payload(event))
-            elif request.progress is not None and line.strip():
-                request.progress(
-                    {
-                        "providerEventType": "stdout",
-                        "summary": line[:240],
-                        "content": line,
-                        "raw": {"line": line, "stream": "stdout"},
-                    }
-                )
             text = self._extract_event_text_from_event(event) if event is not None else None
             if text:
                 output = text
 
-        def on_stderr_line(line: str) -> None:
-            if request.progress is None or not line.strip():
-                return
-            request.progress(
-                {
-                    "providerEventType": "stderr",
-                    "summary": line[:240],
-                    "content": line,
-                    "raw": {"line": line, "stream": "stderr"},
-                }
-            )
-
-        result = await self.harness.run(
-            args,
-            process_key=request.agent.id,
-            cwd=request.agent.workspace,
-            on_stdout_line=on_line,
-            on_stderr_line=on_stderr_line,
-            stdin_text=stdin_text,
-        )
+        run_kwargs = {
+            "process_key": request.agent.id,
+            "cwd": request.agent.workspace,
+            "on_stdout_line": on_line,
+            "stdin_text": stdin_text,
+        }
+        if "on_stderr_line" in inspect.signature(self.harness.run).parameters:
+            run_kwargs["on_stderr_line"] = None
+        result = await self.harness.run(args, **run_kwargs)
         if result.return_code != 0:
             raise RuntimeError(f"Codex exited with {result.return_code}: {result.stderr.strip()}")
         if not output:
             output = self._extract_text(result.stdout)
+        if request.progress is not None:
+            stdout_text = result.stdout.strip()
+            stderr_text = result.stderr.strip()
+            if stdout_text:
+                request.progress(
+                    {
+                        "providerEventType": "stdout",
+                        "summary": output[:240] if output else stdout_text[:240],
+                        "content": stdout_text,
+                        "raw": {"stream": "stdout", "stdout": result.stdout},
+                    }
+                )
+            if stderr_text:
+                request.progress(
+                    {
+                        "providerEventType": "stderr",
+                        "summary": stderr_text[:240],
+                        "content": stderr_text,
+                        "raw": {"stream": "stderr", "stderr": result.stderr},
+                    }
+                )
         return ProviderResponse(
             text=output or result.stdout.strip() or "Sorry, I could not generate a response from Codex.",
             raw={
@@ -123,11 +124,11 @@ class CodexProvider(AgentProvider):
 
     def _prompt(self, request: ProviderRequest) -> str:
         chunks: list[str] = []
-        # system_prompt = request.agent.system_prompt or request.agent.role
-        # if system_prompt:
-        #     chunks.append(f"System instructions:\n{system_prompt}")
-        # if request.context:
-        #     chunks.append("Context:\n" + "\n\n".join(request.context))
+        system_prompt = request.agent.system_prompt or request.agent.role
+        if system_prompt:
+            chunks.append(f"System instructions:\n{system_prompt}")
+        if request.context:
+            chunks.append("Context:\n" + "\n\n".join(request.context))
         chunks.append(request.input)
         return "\n\n".join(chunks)
 

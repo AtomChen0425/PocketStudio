@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import shlex
 
@@ -30,41 +31,42 @@ class CliAgentProvider(AgentProvider):
 
         def on_line(line: str) -> None:
             nonlocal output
-            if request.progress is not None and line.strip():
-                request.progress(
-                    {
-                        "providerEventType": "stdout",
-                        "summary": line[:240],
-                        "content": line,
-                        "raw": {"line": line, "stream": "stdout"},
-                    }
-                )
             text = self._extract_event_text(line)
             if text:
                 output = text
 
-        def on_stderr_line(line: str) -> None:
-            if request.progress is None or not line.strip():
-                return
-            request.progress(
-                {
-                    "providerEventType": "stderr",
-                    "summary": line[:240],
-                    "content": line,
-                    "raw": {"line": line, "stream": "stderr"},
-                }
-            )
-
-        result = await self.harness.run(
-            self._args(request),
-            process_key=request.agent.id,
-            cwd=request.agent.workspace,
-            on_stdout_line=on_line,
-            on_stderr_line=on_stderr_line,
-        )
+        run_kwargs = {
+            "process_key": request.agent.id,
+            "cwd": request.agent.workspace,
+            "on_stdout_line": on_line,
+        }
+        if "on_stderr_line" in inspect.signature(self.harness.run).parameters:
+            run_kwargs["on_stderr_line"] = None
+        result = await self.harness.run(self._args(request), **run_kwargs)
         if result.return_code != 0:
             raise RuntimeError(f"{self.command} exited with {result.return_code}: {result.stderr.strip()}")
         output = output or self._extract_text(result.stdout) or result.stdout.strip()
+        if request.progress is not None:
+            stdout_text = result.stdout.strip()
+            stderr_text = result.stderr.strip()
+            if stdout_text:
+                request.progress(
+                    {
+                        "providerEventType": "stdout",
+                        "summary": output[:240] if output else stdout_text[:240],
+                        "content": stdout_text,
+                        "raw": {"stream": "stdout", "stdout": result.stdout},
+                    }
+                )
+            if stderr_text:
+                request.progress(
+                    {
+                        "providerEventType": "stderr",
+                        "summary": stderr_text[:240],
+                        "content": stderr_text,
+                        "raw": {"stream": "stderr", "stderr": result.stderr},
+                    }
+                )
         return ProviderResponse(
             text=output or f"Sorry, I could not generate a response from {self.name}.",
             raw={
