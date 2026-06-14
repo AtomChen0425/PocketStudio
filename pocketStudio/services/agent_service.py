@@ -223,6 +223,7 @@ class AgentService:
         agent_id: str,
         teammates: str = "",
         *,
+        project_workspace: Path | None = None,
         config_system_prompt: str | None = None,
         config_prompt_file: str | None = None,
     ) -> str:
@@ -250,6 +251,13 @@ class AgentService:
         extra_sections: list[str] = []
         if soul_prompt:
             extra_sections.append("## Operating Principles\n\n" + soul_prompt)
+        if project_workspace is not None:
+            resolved_project_workspace = project_workspace.resolve()
+            extra_sections.append(
+                "## Project Workspace\n\n"
+                f"- `{resolved_project_workspace}`\n"
+                "Use this directory as the project-scoped workspace for the current run."
+            )
         if custom_prompt:
             extra_sections.append(custom_prompt)
         if config_prompt:
@@ -264,6 +272,7 @@ class AgentService:
                 "teammates": teammates.strip(),
                 "memoryIndex": memory_index,
                 "soul": soul_prompt,
+                "projectWorkspace": str(project_workspace.resolve()) if project_workspace is not None else "",
                 "workspacePrompt": workspace_prompt,
                 "agentPrompt": agent.system_prompt.strip(),
                 "configSystemPrompt": config_system_prompt.strip() if config_system_prompt else "",

@@ -48,9 +48,11 @@ class WorkspaceRecordingProvider(AgentProvider):
 
     def __init__(self) -> None:
         self.workspaces: list[Path] = []
+        self.additional_workspaces: list[list[Path]] = []
 
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         self.workspaces.append(request.agent.workspace)
+        self.additional_workspaces.append(list(request.additional_workspaces))
         return ProviderResponse(text=f"workspace={request.agent.workspace}")
 
 
@@ -329,14 +331,57 @@ def test_project_context_runs_agent_inside_project_workspace() -> None:
         result = asyncio.run(orchestrator.process_message(message.id))
 
         expected_workspace = home / "project-root"
-        assert provider.workspaces == [expected_workspace]
+        assert provider.workspaces == [agent.workspace]
+        assert provider.additional_workspaces == [[expected_workspace]]
         assert expected_workspace.is_dir()
         assert not (expected_workspace / ".pocketStudio").exists()
         assert not (expected_workspace / ".agents").exists()
         assert not (expected_workspace / "memory").exists()
         assert not (expected_workspace / "AGENTS.md").exists()
         assert "workspace=" in result.output
-        assert orchestrator.agents.get("scoped").workspace != expected_workspace
+        assert orchestrator.agents.get("scoped").workspace == agent.workspace
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_project_workspace_is_injected_into_system_prompt() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        registry = ProviderRegistry()
+        provider = SystemPromptRecordingProvider()
+        registry.register(provider)
+        projects = ProjectService(db, events)
+        project = projects.create_project(ProjectCreate(name="Prompted Project", workspace=str(home / "prompt-project")))
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=TeamService(db),
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            projects=projects,
+        )
+        orchestrator.agents.create(
+            AgentCreate(id="scoped", name="Scoped", role="Uses project", provider="system-prompt-recording")
+        )
+
+        message = orchestrator.enqueue(
+            MessageCreate(
+                target="@agent:scoped",
+                content="work inside project",
+                metadata={"projectId": project.id},
+            )
+        )
+        asyncio.run(orchestrator.process_message(message.id))
+
+        assert provider.system_prompts
+        prompt = provider.system_prompts[0] or ""
+        assert "## Project Workspace" in prompt
+        assert str((home / "prompt-project").resolve()) in prompt
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
@@ -377,6 +422,7 @@ def test_project_without_workspace_keeps_agent_workspace() -> None:
 
         assert project.workspace is None
         assert provider.workspaces == [agent.workspace]
+        assert provider.additional_workspaces == [[]]
         assert not (home / ".pocketStudio" / "projects").exists()
     finally:
         shutil.rmtree(home, ignore_errors=True)
@@ -423,6 +469,7 @@ def test_legacy_default_project_workspace_keeps_agent_workspace() -> None:
 
         assert project.workspace is None
         assert provider.workspaces == [agent.workspace]
+        assert provider.additional_workspaces == [[]]
     finally:
         shutil.rmtree(home, ignore_errors=True)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import shlex
 from pathlib import Path
@@ -37,43 +38,44 @@ class CodexProvider(AgentProvider):
             event = self._parse_event(line)
             if event is not None and request.progress is not None:
                 request.progress(self._progress_payload(event))
-            elif request.progress is not None and line.strip():
-                request.progress(
-                    {
-                        "providerEventType": "stdout",
-                        "summary": line[:240],
-                        "content": line,
-                        "raw": {"line": line, "stream": "stdout"},
-                    }
-                )
             text = self._extract_event_text_from_event(event) if event is not None else None
             if text:
                 output = text
 
-        def on_stderr_line(line: str) -> None:
-            if request.progress is None or not line.strip():
-                return
-            request.progress(
-                {
-                    "providerEventType": "stderr",
-                    "summary": line[:240],
-                    "content": line,
-                    "raw": {"line": line, "stream": "stderr"},
-                }
-            )
-
-        result = await self.harness.run(
-            args,
-            process_key=request.agent.id,
-            cwd=request.agent.workspace,
-            on_stdout_line=on_line,
-            on_stderr_line=on_stderr_line,
-            stdin_text=stdin_text,
-        )
+        run_kwargs = {
+            "process_key": request.agent.id,
+            "cwd": request.agent.workspace,
+            "on_stdout_line": on_line,
+            "stdin_text": stdin_text,
+        }
+        if "on_stderr_line" in inspect.signature(self.harness.run).parameters:
+            run_kwargs["on_stderr_line"] = None
+        result = await self.harness.run(args, **run_kwargs)
         if result.return_code != 0:
             raise RuntimeError(f"Codex exited with {result.return_code}: {result.stderr.strip()}")
         if not output:
             output = self._extract_text(result.stdout)
+        if request.progress is not None:
+            stdout_text = result.stdout.strip()
+            stderr_text = result.stderr.strip()
+            if stdout_text:
+                request.progress(
+                    {
+                        "providerEventType": "stdout",
+                        "summary": output[:240] if output else stdout_text[:240],
+                        "content": stdout_text,
+                        "raw": {"stream": "stdout", "stdout": result.stdout},
+                    }
+                )
+            if stderr_text:
+                request.progress(
+                    {
+                        "providerEventType": "stderr",
+                        "summary": stderr_text[:240],
+                        "content": stderr_text,
+                        "raw": {"stream": "stderr", "stderr": result.stderr},
+                    }
+                )
         return ProviderResponse(
             text=output or result.stdout.strip() or "Sorry, I could not generate a response from Codex.",
             raw={
@@ -89,6 +91,7 @@ class CodexProvider(AgentProvider):
             return self._custom_args(request)
 
         args = ["exec"]
+        args.extend(self.workspace_args(request))
         if not request.reset:
             args.extend(["resume", "--last"])
         if request.agent.model:
@@ -101,9 +104,19 @@ class CodexProvider(AgentProvider):
         args.extend(["--json", "-"])
         return args, self._prompt(request)
 
+    def workspace_args(self, request: ProviderRequest) -> list[str]:
+        args: list[str] = []
+        for workspace in request.additional_workspaces:
+            args.extend(["--add-dir", str(workspace)])
+        return args
+
     def _custom_args(self, request: ProviderRequest) -> tuple[list[str], str | None]:
         prompt = self._prompt(request)
         args = [arg.replace("{prompt}", prompt) for arg in self.base_args or []]
+        workspace_args = self.workspace_args(request)
+        if workspace_args:
+            insert_at = 1 if args else 0
+            args[insert_at:insert_at] = workspace_args
         if not any("{prompt}" in arg for arg in self.base_args or []):
             args.append("-")
             return args, prompt

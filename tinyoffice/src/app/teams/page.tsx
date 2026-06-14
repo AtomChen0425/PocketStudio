@@ -36,6 +36,7 @@ type FormData = {
   name: string;
   agents: string[];
   leader_agent: string;
+  max_rounds: number;
   useWorkflow: boolean;
   workflowId: string;
   workflowName: string;
@@ -48,6 +49,7 @@ const emptyForm: FormData = {
   name: "",
   agents: [],
   leader_agent: "",
+  max_rounds: 1,
   useWorkflow: false,
   workflowId: "",
   workflowName: "",
@@ -216,6 +218,7 @@ export default function TeamsPage() {
       name: team.name,
       agents: [...team.agents],
       leader_agent: team.leader_agent,
+      max_rounds: team.max_rounds || 1,
       useWorkflow: team.mode === "workflow",
       workflowId: "",
       workflowName: "",
@@ -244,7 +247,7 @@ export default function TeamsPage() {
 
   const handleSave = useCallback(async () => {
     if (!editing) return;
-    const { id, name, agents: teamAgents, leader_agent } = editing;
+    const { id, name, agents: teamAgents, leader_agent, max_rounds } = editing;
     if (!id.trim() || !name.trim()) {
       setError("ID and name are required");
       return;
@@ -287,6 +290,7 @@ export default function TeamsPage() {
         agents: teamAgents,
         leader_agent,
         mode: editing.useWorkflow ? "workflow" : "chain",
+        max_rounds,
       });
       if (editing.useWorkflow && workflowDefinition) {
         await validateTeamWorkflow(teamId, workflowDefinition);
@@ -491,6 +495,24 @@ function TeamEditor({
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="e.g. Backend Team"
             />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Max Rounds</label>
+            <Input
+              type="number"
+              min={1}
+              max={20}
+              step={1}
+              value={form.max_rounds}
+              onChange={(e) => {
+                const next = Number.parseInt(e.target.value, 10);
+                setForm({ ...form, max_rounds: Number.isFinite(next) && next > 0 ? Math.min(next, 20) : 1 });
+              }}
+              placeholder="1"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Controls how many iterative rounds the team can run before stopping.
+            </p>
           </div>
         </div>
 
