@@ -85,7 +85,6 @@ FastAPI route layer. Keep HTTP validation, response shaping, and exception mappi
 | `queue_recover_stale(threshold_seconds: int \| None=None, queue: QueueService=Depends(get_queue_service))` | Queue, response, or message flow operation. |
 | `queue_processing(queue: QueueService=Depends(get_queue_service), registry: ProviderRegistry=Depends(get_provider_registry))` | Queue, response, or message flow operation. |
 | `active_processes(registry: ProviderRegistry=Depends(get_provider_registry))` | Module-level helper. Review callers and tests before changing behavior. |
-| `provider_diagnostics(registry: ProviderRegistry=Depends(get_provider_registry))` | Module-level helper. Review callers and tests before changing behavior. |
 | `async kill_agent_process(agent_id: str, registry: ProviderRegistry=Depends(get_provider_registry))` | Module-level helper. Review callers and tests before changing behavior. |
 | `async kill_processing(message_id: int, queue: QueueService=Depends(get_queue_service), registry: ProviderRegistry=Depends(get_provider_registry))` | Module-level helper. Review callers and tests before changing behavior. |
 | `responses(limit: int=Query(default=20, ge=1, le=200), queue: QueueService=Depends(get_queue_service))` | Module-level helper. Review callers and tests before changing behavior. |
@@ -768,12 +767,6 @@ Class, data model, service object, or exception type.
 
 Agent provider and CLI/Subprocess adapters that isolate external model or command execution details.
 
-| Function | Usage |
-|---|---|
-| `_codex_home_diagnostics(codex_home: Path)` | Module-level helper. Review callers and tests before changing behavior. |
-| `_can_write(path: Path)` | Module-level helper. Review callers and tests before changing behavior. |
-| `_resolved_command_path(command: str \| None)` | Module-level helper. Review callers and tests before changing behavior. |
-
 #### `ProviderRegistry`
 
 Class, data model, service object, or exception type.
@@ -789,7 +782,6 @@ Class, data model, service object, or exception type.
 | `async reset_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `agent_process_alive(self, agent_id: str)` | Helper method for its service or type. |
 | `active_processes(self)` | Helper method for its service or type. |
-| `diagnostics(self)` | Helper method for its service or type. |
 
 ### `pocketStudio/providers/subprocess.py`
 

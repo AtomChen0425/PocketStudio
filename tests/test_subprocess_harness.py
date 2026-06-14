@@ -314,15 +314,6 @@ def test_provider_registry_exposes_core_harnesses() -> None:
 
     assert {"local", "openai", "codex", "claude", "opencode"} <= set(registry.list_names())
     assert isinstance(registry.get("opencode"), OpenCodeProvider)
-    diagnostics = registry.diagnostics()
-    provider_names = {provider["name"] for provider in diagnostics["providers"]}
-    assert {"openai", "codex", "claude"} <= provider_names
-    openai = next(provider for provider in diagnostics["providers"] if provider["name"] == "openai")
-    assert openai["providerName"] == "codex"
-    assert openai["harness"] == "codex"
-    assert "codexHome" in openai
-    assert "workspaceFallbackEnabled" not in openai["codexHome"]
-    assert "windowsPowerShellFallback" in diagnostics
 
 
 def test_provider_registry_builds_custom_codex_command_from_provider_config() -> None:

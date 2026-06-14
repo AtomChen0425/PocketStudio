@@ -422,11 +422,6 @@ def active_processes(registry: ProviderRegistry = Depends(get_provider_registry)
     return {"processes": registry.active_processes()}
 
 
-@router.get("/providers/diagnostics")
-def provider_diagnostics(registry: ProviderRegistry = Depends(get_provider_registry)) -> dict:
-    return registry.diagnostics()
-
-
 @router.post("/processes/{agent_id}/kill")
 async def kill_agent_process(
     agent_id: str,
