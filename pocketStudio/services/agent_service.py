@@ -14,6 +14,7 @@ from pocketStudio.models import Agent, AgentCreate, Team
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BUILTIN_AGENT_INSTRUCTIONS_PATH = _REPO_ROOT / "AGENTS.md"
+_BUILTIN_HEARTBEAT_TEMPLATE_PATH = _REPO_ROOT / "heartbeat.md"
 
 
 def _load_builtin_agent_instructions() -> str:
@@ -111,7 +112,10 @@ class AgentService:
             agents_md.write_text("", encoding="utf-8")
         heartbeat = workspace / "heartbeat.md"
         if not heartbeat.exists():
-            heartbeat.write_text("# Heartbeat\n\nNo heartbeat configured yet.\n", encoding="utf-8")
+            if _BUILTIN_HEARTBEAT_TEMPLATE_PATH.exists():
+                shutil.copy2(_BUILTIN_HEARTBEAT_TEMPLATE_PATH, heartbeat)
+            else:
+                heartbeat.write_text("# Heartbeat\n\nNo heartbeat configured yet.\n", encoding="utf-8")
         soul = workspace / ".pocketStudio" / "SOUL.md"
         if not soul.exists():
             soul.write_text(f"# {payload.name if payload else 'Agent'}\n\nDefine this agent's operating principles here.\n", encoding="utf-8")
