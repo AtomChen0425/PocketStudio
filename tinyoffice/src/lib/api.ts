@@ -251,6 +251,10 @@ export async function getTeams(): Promise<Record<string, TeamConfig>> {
   return Object.fromEntries(teams.map((team) => [team.id, normalizeTeam(team)]));
 }
 
+export async function getProviders(): Promise<string[]> {
+  return apiFetch<string[]>("/api/providers");
+}
+
 export async function getSettings(): Promise<Settings> {
   return apiFetch<Settings>("/api/settings");
 }

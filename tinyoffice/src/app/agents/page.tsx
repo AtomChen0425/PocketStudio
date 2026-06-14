@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { usePolling } from "@/lib/hooks";
-import { getAgents, saveAgent, deleteAgent, type AgentConfig } from "@/lib/api";
+import { getAgents, getProviders, saveAgent, deleteAgent, type AgentConfig } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,12 +26,13 @@ type FormData = {
 };
 
 const emptyForm: FormData = {
-  id: "", name: "", provider: "anthropic", model: "sonnet",
+  id: "", name: "", provider: "codex", model: "gpt-5.5",
   system_prompt: "",
 };
 
 export default function AgentsPage() {
   const { data: agents, loading, refresh } = usePolling<Record<string, AgentConfig>>(getAgents, 0);
+  const { data: providers } = usePolling<string[]>(getProviders, 0);
   const [editing, setEditing] = useState<FormData | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -121,6 +122,7 @@ export default function AgentsPage() {
           <AgentEditor
             form={editing}
             setForm={setEditing}
+            providers={providers}
             isNew={isNew}
             saving={saving}
             error={error}
@@ -165,10 +167,11 @@ export default function AgentsPage() {
 }
 
 function AgentEditor({
-  form, setForm, isNew, saving, error, onSave, onCancel,
+  form, setForm, providers, isNew, saving, error, onSave, onCancel,
 }: {
   form: FormData;
   setForm: (f: FormData) => void;
+  providers: string[] | null;
   isNew: boolean;
   saving: boolean;
   error: string;
@@ -177,6 +180,13 @@ function AgentEditor({
 }) {
   const set = (field: keyof FormData, value: string) =>
     setForm({ ...form, [field]: value });
+
+  const providerOptions = Array.from(
+    new Set([
+      ...((providers && providers.length > 0) ? providers : ["local", "codex", "anthropic", "claude"]),
+      form.provider,
+    ].filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
 
   return (
     <Card className="w-full max-w-lg border-border">
@@ -218,9 +228,11 @@ function AgentEditor({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="anthropic">anthropic</SelectItem>
-                <SelectItem value="openai">openai</SelectItem>
-                <SelectItem value="opencode">opencode</SelectItem>
+                {providerOptions.map((provider) => (
+                  <SelectItem key={provider} value={provider}>
+                    {provider}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -229,7 +241,7 @@ function AgentEditor({
             <Input
               value={form.model}
               onChange={(e) => set("model", e.target.value)}
-              placeholder="e.g. sonnet, opus, gpt-5.3-codex"
+              placeholder="e.g. gpt-5.5, gpt-5.3-codex"
               className="font-mono"
             />
           </div>
