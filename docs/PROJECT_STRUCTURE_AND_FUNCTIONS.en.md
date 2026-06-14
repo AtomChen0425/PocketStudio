@@ -100,7 +100,7 @@ FastAPI route layer. Keep HTTP validation, response shaping, and exception mappi
 | `read_chat_archive(team_id: str, limit: int=Query(default=500, ge=1, le=2000), sender: str \| None=None, q: str \| None=None, chat: ChatService=Depends(get_chat_service))` | Module-level helper. Review callers and tests before changing behavior. |
 | `agent_messages(agent_id: str, limit: int=Query(default=100, ge=1, le=500), since_id: int=Query(default=0, ge=0), queue: QueueService=Depends(get_queue_service))` | Module-level helper. Review callers and tests before changing behavior. |
 | `all_agent_messages(limit: int=Query(default=100, ge=1, le=500), since_id: int=Query(default=0, ge=0), queue: QueueService=Depends(get_queue_service))` | Module-level helper. Review callers and tests before changing behavior. |
-| `reset_agent_runtime(agent_id: str, agents: AgentService=Depends(get_agent_service), queue: QueueService=Depends(get_queue_service))` | Module-level helper. Review callers and tests before changing behavior. |
+| `async reset_agent_runtime(agent_id: str, agents: AgentService=Depends(get_agent_service), queue: QueueService=Depends(get_queue_service), orchestrator: Orchestrator=Depends(get_orchestrator))` | Module-level helper. Review callers and tests before changing behavior. |
 | `list_plugins(plugins: PluginService=Depends(get_plugin_service))` | Lists resources or query results. |
 | `reload_plugins(plugins: PluginService=Depends(get_plugin_service))` | Module-level helper. Review callers and tests before changing behavior. |
 | `get_agent_system_prompt(agent_id: str, agents: AgentService=Depends(get_agent_service))` | Reads one resource, status object, or derived view. |
@@ -661,6 +661,8 @@ Class, data model, service object, or exception type.
 | Method | Usage |
 |---|---|
 | `setup_workspace(self, workspace: Path)` | Updates or persists an existing resource. |
+| `workspace_args(self, request: ProviderRequest)` | Helper method for its service or type. |
+| `async reset_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `async run(self, request: ProviderRequest)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 
 ### `pocketStudio/providers/cli_agent.py`
@@ -684,6 +686,7 @@ Class, data model, service object, or exception type.
 | `_extract_text(cls, stdout: str)` | Converts, parses, or formats internal data. |
 | `_extract_event_text(line: str)` | Converts, parses, or formats internal data. |
 | `is_alive(self, agent_id: str)` | Helper method for its service or type. |
+| `async reset_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `async kill_agent(self, agent_id: str)` | Helper method for its service or type. |
 
 #### `ClaudeProvider(CliAgentProvider)`
@@ -721,6 +724,7 @@ Class, data model, service object, or exception type.
 | `setup_workspace(self, workspace: Path)` | Updates or persists an existing resource. |
 | `async run(self, request: ProviderRequest)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_args(self, request: ProviderRequest)` | Helper method for its service or type. |
+| `workspace_args(self, request: ProviderRequest)` | Helper method for its service or type. |
 | `_custom_args(self, request: ProviderRequest)` | Helper method for its service or type. |
 | `_prompt(self, request: ProviderRequest)` | Helper method for its service or type. |
 | `_extract_text(cls, stdout: str)` | Converts, parses, or formats internal data. |
@@ -732,6 +736,7 @@ Class, data model, service object, or exception type.
 | `_event_summary(event_type: str, item: dict, content: str, tool: str \| None)` | Helper method for its service or type. |
 | `_compact_event(event: dict)` | Helper method for its service or type. |
 | `is_alive(self, agent_id: str)` | Helper method for its service or type. |
+| `async reset_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `async kill_agent(self, agent_id: str)` | Helper method for its service or type. |
 
 ### `pocketStudio/providers/local.py`
@@ -781,6 +786,7 @@ Class, data model, service object, or exception type.
 | `get(self, name: str)` | Reads one resource, status object, or derived view. |
 | `list_names(self)` | Lists resources or query results. |
 | `async kill_agent(self, agent_id: str)` | Helper method for its service or type. |
+| `async reset_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `agent_process_alive(self, agent_id: str)` | Helper method for its service or type. |
 | `active_processes(self)` | Helper method for its service or type. |
 | `diagnostics(self)` | Helper method for its service or type. |
@@ -830,6 +836,10 @@ Class, data model, service object, or exception type.
 
 Domain service layer for agents, teams, queues, projects, tasks, schedules, and related logic.
 
+| Function | Usage |
+|---|---|
+| `_load_builtin_agent_instructions()` | Module-level helper. Review callers and tests before changing behavior. |
+
 #### `AgentService`
 
 Class, data model, service object, or exception type.
@@ -847,7 +857,8 @@ Class, data model, service object, or exception type.
 | `save_system_prompt_file(self, agent_id: str, content: str)` | Updates or persists an existing resource. |
 | `get_heartbeat_file(self, agent_id: str)` | Reads one resource, status object, or derived view. |
 | `save_heartbeat_file(self, agent_id: str, content: str \| None=None, enabled: bool \| None=None, interval: int \| None=None)` | Updates or persists an existing resource. |
-| `build_system_prompt(self, agent_id: str, teammates: str='')` | Helper method for its service or type. |
+| `build_teammate_block(self, agent_id: str, teams: list[Team])` | Helper method for its service or type. |
+| `build_system_prompt(self, agent_id: str, teammates: str='', *, project_workspace: Path \| None=None, config_system_prompt: str \| None=None, config_prompt_file: str \| None=None)` | Helper method for its service or type. |
 | `load_memory_index(self, agent_id: str)` | Helper method for its service or type. |
 | `list_memory_files(self, agent_id: str)` | Lists resources or query results. |
 | `get_memory_file(self, agent_id: str, relative_path: str)` | Reads one resource, status object, or derived view. |
@@ -862,6 +873,8 @@ Class, data model, service object, or exception type.
 | `_sync_root_skills(self, target: Path)` | Helper method for its service or type. |
 | `_root_skills_dir()` | Helper method for its service or type. |
 | `_workspace_checks(workspace: Path)` | Helper method for its service or type. |
+| `_inject_block(prompt: str, start_marker: str, end_marker: str, block: str)` | Helper method for its service or type. |
+| `_read_optional_text(path: Path)` | Helper method for its service or type. |
 | `_safe_name(value: str)` | Helper method for its service or type. |
 | `_resolve_memory_path(memory_dir: Path, relative_path: str)` | Helper method for its service or type. |
 | `_parse_frontmatter(content: str)` | Converts, parses, or formats internal data. |
@@ -994,6 +1007,8 @@ Class, data model, service object, or exception type.
 |---|---|
 | `__init__(self, agents: AgentService, teams: TeamService, queue: QueueService, chat: ChatService, events: EventService, providers: ProviderRegistry, projects: ProjectService \| None=None, workflows: WorkflowService \| None=None)` | Python object lifecycle or protocol method. |
 | `enqueue(self, payload: MessageCreate)` | Queue, response, or message flow operation. |
+| `_project_workspace_for_message(self, message: QueueMessage)` | Helper method for its service or type. |
+| `async reset_agent_session(self, agent_id: str, *, cleared: dict[str, int] \| None=None)` | Helper method for its service or type. |
 | `async process_one(self, newest: bool=False)` | Controls a background worker, scheduler, or processing flow. |
 | `async process_message(self, message_id: int)` | Controls a background worker, scheduler, or processing flow. |
 | `async _dispatch(self, message: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
@@ -1020,7 +1035,7 @@ Class, data model, service object, or exception type.
 | `_teams_for_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `_resolve_team_context_for_agent(agent_id: str, teams: list[Team])` | Helper method for its service or type. |
 | `_resolve_team_for_tag(team_id: str, teams: list[Team], agent_id: str)` | Helper method for its service or type. |
-| `async _run_agent(self, agent: Agent, input_text: str, context: list[str], *, message_id: int \| str \| None=None, session_id: str \| None=None, run_id: str \| None=None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `async _run_agent(self, agent: Agent, input_text: str, context: list[str], *, message_id: int \| str \| None=None, session_id: str \| None=None, run_id: str \| None=None, teams: list[Team] \| None=None, project_workspace: Path \| None=None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_agent_for_message(self, agent_id: str, message: QueueMessage)` | Helper method for its service or type. |
 | `_parse_target(target: str)` | Converts, parses, or formats internal data. |
 | `decode_result(message: QueueMessage)` | Converts, parses, or formats internal data. |

@@ -866,6 +866,7 @@ class Orchestrator:
         system_prompt = self.agents.build_system_prompt(
             agent.id,
             teammates=self.agents.build_teammate_block(agent.id, active_teams),
+            project_workspace=project_workspace,
         )
         runtime_agent = agent.model_copy(update={"system_prompt": system_prompt})
         reset_session = agent.id in self._reset_agents
