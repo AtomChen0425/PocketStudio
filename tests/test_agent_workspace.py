@@ -6,6 +6,7 @@ from pocketStudio.core.dependencies import get_database
 from fastapi.testclient import TestClient
 
 from pocketStudio.main import app
+import pocketStudio.services.agent_service as agent_service
 
 
 def test_agent_workspace_prompt_memory_and_skills() -> None:
@@ -71,6 +72,38 @@ def test_agent_workspace_prompt_memory_and_skills() -> None:
         skills_response = client.get(f"/api/agents/{agent_id}/skills")
         assert skills_response.status_code == 200
         assert any(item["id"] == "memory" for item in skills_response.json())
+
+
+def test_agent_workspace_uses_builtin_heartbeat_template_when_available(monkeypatch) -> None:
+    agent_id = f"heartbeat-template-agent-{uuid.uuid4().hex[:8]}"
+    template = Path(".pytest-local") / f"heartbeat-template-{uuid.uuid4().hex[:8]}.md"
+    template.parent.mkdir(parents=True, exist_ok=True)
+    template.write_text("# Template Heartbeat\n\nUse this template.\n", encoding="utf-8")
+    monkeypatch.setattr(agent_service, "_BUILTIN_HEARTBEAT_TEMPLATE_PATH", template)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/agents",
+            json={"id": agent_id, "name": "Heartbeat Template Agent", "role": "Uses template", "provider": "local"},
+        )
+        assert response.status_code == 200
+        workspace = Path(response.json()["workspace"])
+        assert (workspace / "heartbeat.md").read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
+
+
+def test_agent_workspace_uses_default_heartbeat_when_template_missing(monkeypatch) -> None:
+    agent_id = f"heartbeat-default-agent-{uuid.uuid4().hex[:8]}"
+    template = Path(".pytest-local") / f"missing-heartbeat-template-{uuid.uuid4().hex[:8]}.md"
+    monkeypatch.setattr(agent_service, "_BUILTIN_HEARTBEAT_TEMPLATE_PATH", template)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/agents",
+            json={"id": agent_id, "name": "Heartbeat Default Agent", "role": "Uses default", "provider": "local"},
+        )
+        assert response.status_code == 200
+        workspace = Path(response.json()["workspace"])
+        assert (workspace / "heartbeat.md").read_text(encoding="utf-8") == "# Heartbeat\n\nNo heartbeat configured yet.\n"
 
 
 def test_agent_workspace_status_and_repair() -> None:
