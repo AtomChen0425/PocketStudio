@@ -831,9 +831,14 @@ class Orchestrator:
         if not agent.enabled:
             raise ValueError(f"Agent '{agent.id}' is disabled")
         provider = self.providers.get(agent.provider)
-        
+        active_teams = teams if teams is not None else self._teams_for_agent(agent.id)
+        system_prompt = self.agents.build_system_prompt(
+            agent.id,
+            teammates=self.agents.build_teammate_block(agent.id, active_teams),
+            project_workspace=project_workspace,
+        )
         if agent.id not in self._initialized_workspaces:
-            provider.setup_workspace(agent.workspace)
+            provider.setup_workspace(agent.workspace,system_prompt=system_prompt)
             self._initialized_workspaces.add(agent.id)
             
         message_id_text = str(message_id) if message_id is not None else None
@@ -862,12 +867,6 @@ class Orchestrator:
             }
             self.events.emit("agent.progress", normalized_payload)
 
-        active_teams = teams if teams is not None else self._teams_for_agent(agent.id)
-        system_prompt = self.agents.build_system_prompt(
-            agent.id,
-            teammates=self.agents.build_teammate_block(agent.id, active_teams),
-            project_workspace=project_workspace,
-        )
         runtime_agent = agent.model_copy(update={"system_prompt": system_prompt})
         reset_session = agent.id in self._reset_agents
         if reset_session:

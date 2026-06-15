@@ -29,7 +29,7 @@ class NanobotProvider(AgentProvider):
         self._session_keys: dict[str, str] = {}
         self._agent_workspaces: dict[str, Path] = {}
 
-    def setup_workspace(self, workspace: Path) -> None:
+    def setup_workspace(self, workspace: Path,system_prompt: str | None = None) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         root_skills_dir = workspace / ".agents" / "skills"
         AgentService.ensure_tool_skills_link(root_skills_dir, workspace / "skills")
@@ -39,11 +39,15 @@ class NanobotProvider(AgentProvider):
                 shutil.copy2(_BUILTIN_NANOBOT_CONFIG_TEMPLATE_PATH, config_path)
             else:
                 config_path.write_text("{}", encoding="utf-8")
+        if system_prompt:
+            prompt_path = workspace / "AGENTS.md"
+            if not prompt_path.exists() or not prompt_path.read_text(encoding="utf-8").strip():
+                prompt_path.write_text(system_prompt, encoding="utf-8")
 
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         Nanobot, AgentHook = self._load_sdk()
         workspace = request.agent.workspace.resolve()
-        self.setup_workspace(workspace)
+        self.setup_workspace(workspace, system_prompt=request.agent.system_prompt or None)
         self._sync_config_for_agent(workspace, request.agent)
         self._agent_workspaces[request.agent.id] = workspace
         session_key = self._session_key_for(request.agent.id, workspace)

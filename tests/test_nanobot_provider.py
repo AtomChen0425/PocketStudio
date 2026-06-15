@@ -154,6 +154,19 @@ def test_nanobot_provider_setup_workspace_creates_state_dir() -> None:
         shutil.rmtree(home, ignore_errors=True)
 
 
+def test_nanobot_provider_setup_workspace_writes_agents_md() -> None:
+    home = Path(".pytest-tmp") / f"nanobot-{uuid.uuid4().hex}"
+    home.mkdir(parents=True)
+    provider = NanobotProvider()
+    workspace = home / "workspace"
+
+    try:
+        provider.setup_workspace(workspace, system_prompt="SYSTEM PROMPT")
+        assert (workspace / "AGENTS.md").read_text(encoding="utf-8") == "SYSTEM PROMPT"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def test_nanobot_provider_syncs_agent_config_fields(monkeypatch) -> None:
     home = Path(".pytest-tmp") / f"nanobot-{uuid.uuid4().hex}"
     home.mkdir(parents=True)
