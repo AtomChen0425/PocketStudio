@@ -65,6 +65,8 @@ export interface AgentConfig {
   name: string;
   provider: string;
   model: string;
+  model_provider?: string;
+  api_key?: string;
   working_directory: string;
   system_prompt?: string;
   prompt_file?: string;
@@ -337,6 +339,8 @@ export async function saveAgent(
       system_prompt: agent.system_prompt || "",
       provider: agent.provider,
       model: agent.model || null,
+      model_provider: agent.model_provider || "",
+      api_key: agent.api_key || "",
       workspace: agent.working_directory || null,
       enabled: true,
       heartbeat_enabled: agent.heartbeat?.enabled ?? true,

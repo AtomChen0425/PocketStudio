@@ -44,6 +44,7 @@ class NanobotProvider(AgentProvider):
         Nanobot, AgentHook = self._load_sdk()
         workspace = request.agent.workspace.resolve()
         self.setup_workspace(workspace)
+        self._sync_config_for_agent(workspace, request.agent)
         self._agent_workspaces[request.agent.id] = workspace
         session_key = self._session_key_for(request.agent.id, workspace)
         config_path = self.config_path or self._config_path_for_workspace(workspace)
@@ -139,6 +140,27 @@ class NanobotProvider(AgentProvider):
             return None
         return Path(row["workspace"]).expanduser()
 
+    def _sync_config_for_agent(self, workspace: Path, agent) -> None:
+        config_path = self.config_path or self._config_path_for_workspace(workspace)
+        config = self._load_json_object(config_path)
+        if not config and _BUILTIN_NANOBOT_CONFIG_TEMPLATE_PATH.exists():
+            config = self._load_json_object(_BUILTIN_NANOBOT_CONFIG_TEMPLATE_PATH)
+        agents_block = config.setdefault("agents", {})
+        defaults = agents_block.setdefault("defaults", {})
+        provider_name = str(getattr(agent, "model_provider", "") or "").strip()
+        model_name = str(getattr(agent, "model", "") or "").strip()
+        api_key = str(getattr(agent, "api_key", "") or "").strip()
+
+        if getattr(agent, "provider", "") == "nanobot":
+            defaults["provider"] = provider_name or defaults.get("provider", "auto")
+            defaults["model"] = model_name or defaults.get("model", "")
+        if provider_name:
+            providers = config.setdefault("providers", {})
+            provider_config = providers.setdefault(provider_name, {})
+            provider_config["apiKey"] = api_key or provider_config.get("apiKey", "")
+
+        self._write_json_object(config_path, config)
+
     @staticmethod
     def _session_key_path(workspace: Path) -> Path:
         return workspace / "sessions_key.txt"
@@ -146,6 +168,21 @@ class NanobotProvider(AgentProvider):
     @staticmethod
     def _config_path_for_workspace(workspace: Path) -> Path:
         return workspace / "config.json"
+
+    @staticmethod
+    def _load_json_object(path: Path) -> dict:
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _write_json_object(path: Path, value: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     @staticmethod
     def _load_sdk():

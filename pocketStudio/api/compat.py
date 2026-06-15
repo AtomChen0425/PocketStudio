@@ -131,6 +131,8 @@ def _settings_apply_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 system_prompt=config.get("system_prompt") or "",
                 provider=config.get("provider") or "local",
                 model=config.get("model") or None,
+                model_provider=config.get("model_provider") or "",
+                api_key=config.get("api_key") or "",
                 workspace=_settings_path_value(config.get("working_directory") or config.get("workspace")),
                 enabled=config.get("enabled", True),
                 heartbeat_enabled=(config.get("heartbeat") or {}).get("enabled", True),

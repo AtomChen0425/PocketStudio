@@ -14,6 +14,8 @@ export type BackendAgent = {
   system_prompt?: string;
   provider: string;
   model?: string | null;
+  model_provider?: string | null;
+  api_key?: string | null;
   workspace?: string;
   heartbeat_enabled?: boolean;
   heartbeat_interval?: number | null;
@@ -90,6 +92,8 @@ export function normalizeAgent(agent: BackendAgent): AgentConfig {
     name: agent.name,
     provider: agent.provider || "local",
     model: agent.model || "",
+    model_provider: agent.model_provider || "",
+    api_key: agent.api_key || "",
     working_directory: agent.workspace || "",
     system_prompt: agent.system_prompt || agent.role || "",
     heartbeat: {

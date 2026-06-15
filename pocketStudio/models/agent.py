@@ -8,6 +8,8 @@ class AgentCreate(BaseModel):
     system_prompt: str = ""
     provider: str = "local"
     model: str | None = None
+    model_provider: str = ""
+    api_key: str = ""
     workspace: Path | None = None
     enabled: bool = True
     heartbeat_enabled: bool = True

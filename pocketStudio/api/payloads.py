@@ -24,6 +24,8 @@ def agent_config(agent: Agent) -> dict[str, Any]:
         "name": agent.name,
         "provider": agent.provider,
         "model": agent.model or "",
+        "model_provider": agent.model_provider,
+        "api_key": agent.api_key,
         "working_directory": str(agent.workspace),
         "system_prompt": agent.system_prompt or agent.role,
         "heartbeat": {"enabled": agent.heartbeat_enabled, "interval": agent.heartbeat_interval},

@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS agents (
     system_prompt TEXT NOT NULL DEFAULT '',
     provider TEXT NOT NULL,
     model TEXT,
+    model_provider TEXT NOT NULL DEFAULT '',
+    api_key TEXT NOT NULL DEFAULT '',
     workspace TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     heartbeat_enabled INTEGER NOT NULL DEFAULT 1,
@@ -248,10 +250,13 @@ class Database:
         self._add_column(conn, "schedules", "last_fire_key", "TEXT")
         self._add_column(conn, "agents", "heartbeat_enabled", "INTEGER NOT NULL DEFAULT 1")
         self._add_column(conn, "agents", "heartbeat_interval", "INTEGER")
+        self._add_column(conn, "agents", "model_provider", "TEXT NOT NULL DEFAULT ''")
+        self._add_column(conn, "agents", "api_key", "TEXT NOT NULL DEFAULT ''")
         self._add_column(conn, "teams", "leader_agent", "TEXT NOT NULL DEFAULT ''")
         self._add_column(conn, "teams", "max_rounds", "INTEGER NOT NULL DEFAULT 1")
         self._add_column(conn, "teams", "stop_when_idle", "INTEGER NOT NULL DEFAULT 1")
         self._migrate_team_mode_check(conn)
+        self._migrate_agent_model_provider(conn)
         self._backfill_task_numbers(conn)
 
     @staticmethod
@@ -294,6 +299,23 @@ class Database:
         conn.execute("DROP TABLE teams")
         conn.execute("ALTER TABLE teams_new RENAME TO teams")
         conn.execute("PRAGMA foreign_keys = ON")
+
+    @staticmethod
+    def _migrate_agent_model_provider(conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
+        if "nanobot_provider" in columns:
+            conn.execute(
+                """
+                UPDATE agents
+                SET model_provider = COALESCE(NULLIF(model_provider, ''), nanobot_provider),
+                    api_key = COALESCE(NULLIF(api_key, ''), nanobot_api_key),
+                    model = COALESCE(NULLIF(model, ''), nanobot_model)
+                WHERE
+                    (model_provider IS NULL OR model_provider = '')
+                    OR (api_key IS NULL OR api_key = '')
+                    OR (model IS NULL OR model = '')
+                """
+            )
 
     @staticmethod
     def _backfill_task_numbers(conn: sqlite3.Connection) -> None:

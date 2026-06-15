@@ -1,3 +1,4 @@
+import json
 import asyncio
 import shutil
 import sys
@@ -6,9 +7,12 @@ from types import ModuleType, SimpleNamespace
 
 import uuid
 
-from pocketStudio.models import Agent
+from pocketStudio.core.config import Settings
+from pocketStudio.core.database import Database
+from pocketStudio.models import Agent, AgentCreate
 from pocketStudio.providers.base import ProviderRequest
 from pocketStudio.providers.nanobot import NanobotProvider
+from pocketStudio.services.agent_service import AgentService
 
 
 class FakeNanobot:
@@ -146,5 +150,47 @@ def test_nanobot_provider_setup_workspace_creates_state_dir() -> None:
         assert (workspace / ".pocketStudio" / "nanobot" / "config.json").is_file()
         if template.exists():
             assert (workspace / ".pocketStudio" / "nanobot" / "config.json").read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_nanobot_provider_syncs_agent_config_fields(monkeypatch) -> None:
+    home = Path(".pytest-tmp") / f"nanobot-{uuid.uuid4().hex}"
+    home.mkdir(parents=True)
+    nanobot_module = ModuleType("nanobot")
+    nanobot_module.Nanobot = FakeNanobot
+    agent_module = ModuleType("nanobot.agent")
+    agent_module.AgentHook = FakeAgentHook
+    monkeypatch.setitem(sys.modules, "nanobot", nanobot_module)
+    monkeypatch.setitem(sys.modules, "nanobot.agent", agent_module)
+    FakeNanobot.instances.clear()
+
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path)
+        db.initialize()
+        service = AgentService(db, settings)
+        agent = service.create(
+            AgentCreate(
+                id="nanobot-agent",
+                name="Nanobot Agent",
+                role="Uses nanobot",
+                provider="nanobot",
+                model="gpt-5.5",
+                model_provider="openai",
+                api_key="sk-test",
+                workspace=home / "agent-workspace",
+            )
+        )
+
+        provider = NanobotProvider(db=db)
+        asyncio.run(provider.run(ProviderRequest(agent=agent, input="Hello")))
+
+        config_path = agent.workspace / ".pocketStudio" / "nanobot" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        assert config["agents"]["defaults"]["provider"] == "openai"
+        assert config["agents"]["defaults"]["model"] == "gpt-5.5"
+        assert config["providers"]["openai"]["apiKey"] == "sk-test"
+        assert config["channels"]["sendProgress"] is True
     finally:
         shutil.rmtree(home, ignore_errors=True)
