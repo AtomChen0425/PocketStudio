@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import importlib
 import json
 import shutil
@@ -78,12 +79,19 @@ class NanobotProvider(AgentProvider):
                     payload = provider._tool_result_payload(tool_result)
                     request.progress(payload)
 
-        async with Nanobot.from_config(config_path=config_path, workspace=workspace) as bot:
+        bot = Nanobot.from_config(config_path=config_path, workspace=workspace)
+        try:
             result = await bot.run(
                 request.input,
                 session_key=session_key,
                 hooks=[PocketStudioHook()],
             )
+        finally:
+            aclose = getattr(bot, "aclose", None)
+            if callable(aclose):
+                maybe_close = aclose()
+                if inspect.isawaitable(maybe_close):
+                    await maybe_close
 
         content = getattr(result, "content", "") or ""
         raw = {
