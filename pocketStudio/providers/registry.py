@@ -20,12 +20,12 @@ class ProviderRegistry:
         codex_provider = CodexProvider(registry=self.processes)
         claude_provider = ClaudeProvider(registry=self.processes)
         self._providers: dict[str, AgentProvider] = {
-            "local": LocalEchoProvider(),
-            "openai": codex_provider,
+            # "local": LocalEchoProvider(),
+            # "openai": codex_provider,
             "codex": codex_provider,
-            "anthropic": claude_provider,
-            "claude": claude_provider,
-            "opencode": OpenCodeProvider(registry=self.processes),
+            # "anthropic": claude_provider,
+            # "claude": claude_provider,
+            # "opencode": OpenCodeProvider(registry=self.processes),
             "nanobot": NanobotProvider(db=self.db),
         }
         self.reload_custom()
