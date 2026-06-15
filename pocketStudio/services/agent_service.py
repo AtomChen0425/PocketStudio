@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import re
 import shutil
 from hashlib import sha256
@@ -55,14 +56,19 @@ class AgentService:
         self.ensure_workspace(workspace, payload)
         self.db.execute(
             """
-            INSERT INTO agents (id, name, role, system_prompt, provider, model, workspace, enabled, heartbeat_enabled, heartbeat_interval)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO agents (
+              id, name, role, system_prompt, provider, model, model_provider, api_key,
+              workspace, enabled, heartbeat_enabled, heartbeat_interval
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               role = excluded.role,
               system_prompt = excluded.system_prompt,
               provider = excluded.provider,
               model = excluded.model,
+              model_provider = excluded.model_provider,
+              api_key = excluded.api_key,
               workspace = excluded.workspace,
               enabled = excluded.enabled,
               heartbeat_enabled = excluded.heartbeat_enabled,
@@ -76,11 +82,24 @@ class AgentService:
                 payload.system_prompt,
                 payload.provider,
                 payload.model,
+                payload.model_provider,
+                payload.api_key,
                 str(workspace),
                 int(payload.enabled),
                 int(payload.heartbeat_enabled),
                 heartbeat_interval,
             ),
+        )
+        now_ms = int(time.time() * 1000)
+        self.db.execute(
+            """
+            INSERT INTO heartbeat_state (agent_id, last_sent_at, last_message_id)
+            VALUES (?, ?, NULL)
+            ON CONFLICT(agent_id) DO UPDATE SET
+              last_sent_at = excluded.last_sent_at,
+              last_message_id = heartbeat_state.last_message_id
+            """,
+            (payload.id, now_ms),
         )
         agent = self.get(payload.id)
         self._sync_agent_settings(agent)
@@ -553,6 +572,8 @@ class AgentService:
             "name": agent.name,
             "provider": agent.provider,
             "model": agent.model or "",
+            "model_provider": agent.model_provider,
+            "api_key": agent.api_key,
             "working_directory": str(agent.workspace),
             "system_prompt": agent.system_prompt or agent.role,
             "heartbeat": {"enabled": agent.heartbeat_enabled, "interval": agent.heartbeat_interval},
@@ -575,6 +596,8 @@ class AgentService:
             system_prompt=row["system_prompt"],
             provider=row["provider"],
             model=row["model"],
+            model_provider=row["model_provider"] if "model_provider" in row.keys() else "",
+            api_key=row["api_key"] if "api_key" in row.keys() else "",
             workspace=row["workspace"],
             enabled=bool(row["enabled"]),
             heartbeat_enabled=bool(row["heartbeat_enabled"]),

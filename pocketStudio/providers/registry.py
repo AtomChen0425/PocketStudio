@@ -6,11 +6,12 @@ from pocketStudio.providers.cli_agent import ClaudeProvider, OpenCodeProvider, p
 from pocketStudio.providers.codex import CodexProvider, codex_provider_from_command
 from pocketStudio.providers.local import LocalEchoProvider
 from pocketStudio.providers.openai_compatible import OpenAICompatibleProvider
+from pocketStudio.providers.nanobot import NanobotProvider
 from pocketStudio.providers.subprocess import ProcessRegistry
 
 
 class ProviderRegistry:
-    BUILTIN_PROVIDERS = {"local", "openai", "codex", "anthropic", "claude", "opencode"}
+    BUILTIN_PROVIDERS = {"local", "openai", "codex", "anthropic", "claude", "opencode", "nanobot"}
 
     def __init__(self, db: Database | None = None) -> None:
         self.db = db
@@ -23,8 +24,9 @@ class ProviderRegistry:
             # "openai": codex_provider,
             "codex": codex_provider,
             # "anthropic": claude_provider,
-            "claude": claude_provider,
+            # "claude": claude_provider,
             # "opencode": OpenCodeProvider(registry=self.processes),
+            "nanobot": NanobotProvider(db=self.db),
         }
         self.reload_custom()
 

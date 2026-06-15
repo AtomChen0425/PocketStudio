@@ -312,7 +312,7 @@ def test_cli_agent_providers_build_args_and_parse_output() -> None:
 def test_provider_registry_exposes_core_harnesses() -> None:
     registry = ProviderRegistry()
 
-    assert {"local", "openai", "codex", "claude", "opencode"} <= set(registry.list_names())
+    assert {"local", "openai", "codex", "claude", "opencode", "nanobot"} <= set(registry.list_names())
     assert isinstance(registry.get("opencode"), OpenCodeProvider)
 
 

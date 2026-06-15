@@ -39,6 +39,10 @@ def update_agent(agent_id: str, payload: dict, service: AgentService = Depends(g
             system_prompt=system_prompt if system_prompt is not None else (current.system_prompt if current else ""),
             provider=payload.get("provider") or (current.provider if current else "local"),
             model=payload.get("model") if "model" in payload else (current.model if current else None),
+            model_provider=payload.get("model_provider")
+            if "model_provider" in payload
+            else (current.model_provider if current else ""),
+            api_key=payload.get("api_key") if "api_key" in payload else (current.api_key if current else ""),
             workspace=payload.get("working_directory") or payload.get("workspace") or (current.workspace if current else None),
             enabled=payload.get("enabled", current.enabled if current else True),
             heartbeat_enabled=heartbeat.get("enabled", payload.get("heartbeat_enabled", current.heartbeat_enabled if current else True)),

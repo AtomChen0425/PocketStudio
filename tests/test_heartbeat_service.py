@@ -10,22 +10,23 @@ def test_heartbeat_reads_agent_file_and_respects_interval() -> None:
     queue = get_queue_service()
     heartbeat = get_heartbeat_service()
 
-    agent = agents.create(AgentCreate(id=agent_id, name="Heartbeat", role="Checks in", provider="local"))
+    agent = agents.create(AgentCreate(id=agent_id, name="Heartbeat", role="Checks in", provider="local", heartbeat_interval=10))
     (agent.workspace / "heartbeat.md").write_text("Custom heartbeat prompt", encoding="utf-8")
 
-    first = heartbeat.fire_due(queue, now_ms=1_000_000)
-    second = heartbeat.fire_due(queue, now_ms=1_000_100)
+    now_ms = int(__import__("time").time() * 1000)
+    first = heartbeat.fire_due(queue, now_ms=now_ms)
+    second = heartbeat.fire_due(queue, now_ms=now_ms + 11_000)
 
-    message = next(item for item in first if item.target == f"@agent:{agent_id}")
+    assert first == []
+    message = next(item for item in second if item.target == f"@agent:{agent_id}")
     assert message.content == "Custom heartbeat prompt"
-    assert second == []
 
-    snapshot = heartbeat.snapshot(now_ms=1_000_100)
-    assert snapshot["lastSent"][agent_id] == 1_000_000
+    snapshot = heartbeat.snapshot(now_ms=now_ms + 11_000)
+    assert snapshot["lastSent"][agent_id] == now_ms + 11_000
     assert snapshot["lastMessageIds"][agent_id] == message.id
-    assert snapshot["agents"][agent_id]["lastSentAt"] == 1_000_000
+    assert snapshot["agents"][agent_id]["lastSentAt"] == now_ms + 11_000
     assert snapshot["agents"][agent_id]["lastMessageId"] == message.id
-    assert snapshot["agents"][agent_id]["nextDueAt"] > 1_000_000
+    assert snapshot["agents"][agent_id]["nextDueAt"] > now_ms + 11_000
     assert snapshot["agents"][agent_id]["due"] is False
     assert snapshot["enabledCount"] >= 1
     assert snapshot["dueCount"] >= 0
@@ -134,3 +135,17 @@ def test_new_agent_gets_default_heartbeat_interval_from_monitoring_settings() ->
         assert heartbeat.json()["interval"] == 77
         settings = client.get("/api/settings").json()
         assert settings["agents"][agent_id]["heartbeat"] == {"enabled": True, "interval": 77}
+
+
+def test_new_agent_does_not_fire_heartbeat_immediately() -> None:
+    agents = get_agent_service()
+    queue = get_queue_service()
+    heartbeat = get_heartbeat_service()
+
+    agent_id = f"heartbeat-cooldown-{uuid.uuid4().hex[:8]}"
+    agent = agents.create(AgentCreate(id=agent_id, name="Heartbeat Cooldown", role="Waits before first ping", provider="local", heartbeat_interval=3600))
+
+    assert heartbeat.fire_due(queue, now_ms=1_000_000) == []
+    snapshot = heartbeat.snapshot(now_ms=1_000_000)
+    assert snapshot["agents"][agent.id]["lastSentAt"] is not None
+    assert snapshot["agents"][agent.id]["due"] is False

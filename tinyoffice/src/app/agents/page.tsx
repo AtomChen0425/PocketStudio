@@ -22,11 +22,14 @@ type FormData = {
   name: string;
   provider: string;
   model: string;
+  model_provider: string;
+  api_key: string;
   system_prompt: string;
 };
 
 const emptyForm: FormData = {
   id: "", name: "", provider: "codex", model: "gpt-5.5",
+  model_provider: "", api_key: "",
   system_prompt: "",
 };
 
@@ -51,6 +54,8 @@ export default function AgentsPage() {
       name: agent.name,
       provider: agent.provider,
       model: agent.model,
+      model_provider: agent.model_provider || "",
+      api_key: agent.api_key || "",
       system_prompt: agent.system_prompt || "",
     });
     setIsNew(false);
@@ -61,9 +66,13 @@ export default function AgentsPage() {
 
   const handleSave = useCallback(async () => {
     if (!editing) return;
-    const { id, name, provider, model, system_prompt } = editing;
+    const { id, name, provider, model, model_provider, api_key, system_prompt } = editing;
     if (!id.trim() || !name.trim() || !provider.trim() || !model.trim()) {
       setError("ID, name, provider, and model are required");
+      return;
+    }
+    if (provider === "nanobot" && (!model_provider.trim() || !api_key.trim())) {
+      setError("Model provider and API key are required when provider is nanobot");
       return;
     }
     if (/\s/.test(id)) {
@@ -75,6 +84,8 @@ export default function AgentsPage() {
     try {
       await saveAgent(id.toLowerCase(), {
         name, provider, model,
+        model_provider,
+        api_key,
         ...(system_prompt ? { system_prompt } : {}),
       });
       setEditing(null);
@@ -245,6 +256,30 @@ function AgentEditor({
               className="font-mono"
             />
           </div>
+          
+          {form.provider === "nanobot" && (
+            <>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Model Provider</label>
+                <Input
+                  value={form.model_provider}
+                  onChange={(e) => set("model_provider", e.target.value)}
+                  placeholder="e.g. openai"
+                  className="font-mono"
+                />
+              </div>
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-xs font-medium text-muted-foreground">API Key</label>
+                <Input
+                  type="password"
+                  value={form.api_key}
+                  onChange={(e) => set("api_key", e.target.value)}
+                  placeholder="sk-..."
+                  className="font-mono"
+                />
+              </div>
+            </>
+          )}
           <div className="space-y-1.5 md:col-span-2">
             <label className="text-xs font-medium text-muted-foreground">System Prompt (optional)</label>
             <Textarea

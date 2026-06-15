@@ -27,7 +27,10 @@ class ProviderResponse(BaseModel):
 class AgentProvider(ABC):
     name: str
 
-    def setup_workspace(self, workspace: Path) -> None:
+    def setup_workspace(
+        self,
+        workspace: Path
+    ) -> None:
         """Set up the workspace for the provider."""
         pass
 
