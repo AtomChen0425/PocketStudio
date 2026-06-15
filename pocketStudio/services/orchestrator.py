@@ -756,6 +756,60 @@ class Orchestrator:
             delivered += 1
         return delivered
 
+    def dispatch_team_message(
+        self,
+        team_id: str,
+        message: str,
+        *,
+        sender: str = "user",
+        chat_message_id: int | None = None,
+        conn: Any | None = None,
+        emit_event: bool = True,
+    ) -> dict[str, Any]:
+        team = self.teams.get(team_id)
+        chat_message = f"[Chat room #{team_id} - @{sender}]:\n{message}"
+        delivered = 0
+        message_ids: list[int] = []
+        queued_messages: list[dict[str, Any]] = []
+        for teammate_id in team.agent_ids:
+            if sender in team.agent_ids and teammate_id == sender:
+                continue
+            metadata = self._team_child_metadata(
+                None,
+                team=team,
+                from_agent=sender,
+                kind="chatroom",
+                to_agent=teammate_id,
+            )
+            metadata["channel"] = "chatroom"
+            if chat_message_id is not None:
+                metadata["parentMessageId"] = f"chat:{chat_message_id}"
+            queued = self.queue.enqueue(
+                MessageCreate(
+                    target=f"@agent:{teammate_id}",
+                    content=chat_message,
+                    sender=sender,
+                    metadata=metadata,
+                ),
+                conn=conn,
+                emit_event=False if conn is not None else True,
+            )
+            message_ids.append(queued.id)
+            queued_messages.append(queued.model_dump())
+            delivered += 1
+        if emit_event:
+            self.events.emit(
+                "team.dispatch",
+                {
+                    "team_id": team.id,
+                    "from_agent": sender,
+                    "delivered": delivered,
+                    "message_id": chat_message_id,
+                    "message_ids": message_ids,
+                },
+            )
+        return {"ok": True, "teamId": team.id, "queued": delivered, "messageIds": message_ids, "queuedMessages": queued_messages}
+
     def _post_chatroom_run_outputs(self, team: Team, runs: list[AgentRun]) -> None:
         for run in runs:
             message = strip_tags(run.output, "#").strip()

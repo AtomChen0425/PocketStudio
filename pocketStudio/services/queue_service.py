@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from datetime import datetime, timezone
 
@@ -28,7 +29,13 @@ class QueueService:
         self.responses = responses or ResponseService(settings)
         self.plugins = plugins
 
-    def enqueue(self, payload: MessageCreate) -> QueueMessage:
+    def enqueue(
+        self,
+        payload: MessageCreate,
+        conn: sqlite3.Connection | None = None,
+        *,
+        emit_event: bool = True,
+    ) -> QueueMessage:
         content = payload.content
         if self.plugins:
             hooked = self.plugins.run_incoming_hooks(
@@ -36,21 +43,37 @@ class QueueService:
                 {"channel": payload.metadata.get("channel", "web"), "sender": payload.sender, "target": payload.target},
             )
             content = hooked.text
-        cursor = self.db.execute(
-            "INSERT INTO messages (target, content, sender, metadata) VALUES (?, ?, ?, ?)",
-            (payload.target, content, payload.sender, json.dumps(payload.metadata, ensure_ascii=False)),
-        )
-        message = self.get(cursor.lastrowid)
-        self.events.emit(
-            "message.queued",
-            {
-                "message_id": message.id,
-                "target": message.target,
-                "content": message.content,
-                "sender": message.sender,
-                "metadata": message.metadata,
-            },
-        )
+        params = (payload.target, content, payload.sender, json.dumps(payload.metadata, ensure_ascii=False))
+        if conn is None:
+            cursor = self.db.execute(
+                "INSERT INTO messages (target, content, sender, metadata) VALUES (?, ?, ?, ?)",
+                params,
+            )
+            message_id = cursor.lastrowid
+        else:
+            cursor = conn.execute(
+                "INSERT INTO messages (target, content, sender, metadata) VALUES (?, ?, ?, ?)",
+                params,
+            )
+            message_id = cursor.lastrowid
+        if conn is None:
+            message = self.get(message_id)
+        else:
+            row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Message '{message_id}' not found")
+            message = self._to_message(row)
+        if emit_event:
+            self.events.emit(
+                "message.queued",
+                {
+                    "message_id": message.id,
+                    "target": message.target,
+                    "content": message.content,
+                    "sender": message.sender,
+                    "metadata": message.metadata,
+                },
+            )
         return message
 
     def get(self, message_id: int) -> QueueMessage:

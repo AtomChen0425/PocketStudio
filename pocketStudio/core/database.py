@@ -70,7 +70,18 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     team_id TEXT NOT NULL,
     sender TEXT NOT NULL,
     message TEXT NOT NULL,
+    client_message_id TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_dispatches (
+    chat_message_id INTEGER PRIMARY KEY,
+    team_id TEXT NOT NULL,
+    client_message_id TEXT,
+    queued_count INTEGER NOT NULL DEFAULT 0,
+    message_ids TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -242,6 +253,7 @@ class Database:
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._add_column(conn, "tasks", "number", "INTEGER NOT NULL DEFAULT 0")
         self._add_column(conn, "messages", "metadata", "TEXT NOT NULL DEFAULT '{}'")
+        self._add_column(conn, "chat_messages", "client_message_id", "TEXT")
         self._add_column(conn, "tasks", "assignee_type", "TEXT NOT NULL DEFAULT ''")
         self._add_column(conn, "tasks", "project_id", "TEXT")
         self._add_column(conn, "tasks", "position", "INTEGER NOT NULL DEFAULT 0")
@@ -257,6 +269,7 @@ class Database:
         self._add_column(conn, "teams", "stop_when_idle", "INTEGER NOT NULL DEFAULT 1")
         self._migrate_team_mode_check(conn)
         self._migrate_agent_model_provider(conn)
+        self._migrate_chat_message_client_id(conn)
         self._backfill_task_numbers(conn)
 
     @staticmethod
@@ -314,6 +327,32 @@ class Database:
                     (model_provider IS NULL OR model_provider = '')
                     OR (api_key IS NULL OR api_key = '')
                     OR (model IS NULL OR model = '')
+                """
+            )
+
+    @staticmethod
+    def _migrate_chat_message_client_id(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_dispatches (
+                chat_message_id INTEGER PRIMARY KEY,
+                team_id TEXT NOT NULL,
+                client_message_id TEXT,
+                queued_count INTEGER NOT NULL DEFAULT 0,
+                message_ids TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
+        if "client_message_id" in columns:
+            conn.execute("DROP INDEX IF EXISTS idx_chat_messages_client_message_id")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_team_client_message_id
+                ON chat_messages(team_id, client_message_id)
+                WHERE client_message_id IS NOT NULL
                 """
             )
 

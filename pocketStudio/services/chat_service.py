@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import datetime, timezone
 
 from pocketStudio.core.database import Database
@@ -12,20 +14,128 @@ class ChatService:
         self.db = db
         self.events = events
 
-    def post(self, team_id: str, payload: ChatMessageCreate) -> ChatMessage:
-        cursor = self.db.execute(
-            "INSERT INTO chat_messages (team_id, sender, message) VALUES (?, ?, ?)",
-            (team_id, payload.sender, payload.message),
-        )
-        message = self.get(cursor.lastrowid)
-        self.events.emit("chat.posted", {"team_id": team_id, "message_id": message.id, "sender": payload.sender})
+    def post(
+        self,
+        team_id: str,
+        payload: ChatMessageCreate,
+        conn: sqlite3.Connection | None = None,
+        *,
+        emit_event: bool = True,
+    ) -> ChatMessage:
+        if payload.client_message_id:
+            existing = self.find_by_client_message_id(team_id, payload.client_message_id, conn=conn)
+            if existing is not None:
+                return existing
+        columns = ["team_id", "sender", "message"]
+        values: list[object] = [team_id, payload.sender, payload.message]
+        if payload.client_message_id:
+            columns.append("client_message_id")
+            values.append(payload.client_message_id)
+        query = f"INSERT INTO chat_messages ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(columns))})"
+        try:
+            if conn is None:
+                cursor = self.db.execute(query, values)
+                message_id = cursor.lastrowid
+            else:
+                cursor = conn.execute(query, values)
+                message_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            if payload.client_message_id:
+                existing = self.find_by_client_message_id(team_id, payload.client_message_id, conn=conn)
+                if existing is not None:
+                    return existing
+            raise
+        if conn is None:
+            message = self.get(message_id)
+        else:
+            row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Chat message '{message_id}' not found")
+            message = self._annotate_dispatch(self._to_message(row))
+        if emit_event:
+            self.events.emit("chat.posted", {"team_id": team_id, "message_id": message.id, "sender": payload.sender})
         return message
 
-    def get(self, message_id: int) -> ChatMessage:
-        row = self.db.fetch_one("SELECT * FROM chat_messages WHERE id = ?", (message_id,))
+    def get(self, message_id: int, conn: sqlite3.Connection | None = None) -> ChatMessage:
+        row = (
+            conn.execute("SELECT * FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+            if conn is not None
+            else self.db.fetch_one("SELECT * FROM chat_messages WHERE id = ?", (message_id,))
+        )
         if row is None:
             raise KeyError(f"Chat message '{message_id}' not found")
-        return self._to_message(row)
+        return self._annotate_dispatch(self._to_message(row), conn=conn)
+
+    def find_by_client_message_id(self, team_id: str, client_message_id: str, conn: sqlite3.Connection | None = None) -> ChatMessage | None:
+        row = (
+            conn.execute("SELECT * FROM chat_messages WHERE team_id = ? AND client_message_id = ?", (team_id, client_message_id)).fetchone()
+            if conn is not None
+            else self.db.fetch_one(
+                "SELECT * FROM chat_messages WHERE team_id = ? AND client_message_id = ?",
+                (team_id, client_message_id),
+            )
+        )
+        return self._annotate_dispatch(self._to_message(row), conn=conn) if row is not None else None
+
+    def get_dispatch(self, chat_message_id: int, conn: sqlite3.Connection | None = None) -> dict | None:
+        row = (
+            conn.execute("SELECT * FROM chat_dispatches WHERE chat_message_id = ?", (chat_message_id,)).fetchone()
+            if conn is not None
+            else self.db.fetch_one("SELECT * FROM chat_dispatches WHERE chat_message_id = ?", (chat_message_id,))
+        )
+        if row is None:
+            return None
+        return {
+            "chat_message_id": row["chat_message_id"],
+            "team_id": row["team_id"],
+            "client_message_id": row["client_message_id"],
+            "queued_count": row["queued_count"],
+            "message_ids": json.loads(row["message_ids"] or "[]"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _annotate_dispatch(self, message: ChatMessage, conn: sqlite3.Connection | None = None) -> ChatMessage:
+        dispatch = self.get_dispatch(message.id, conn=conn)
+        if dispatch is None:
+            return message
+        return message.model_copy(
+            update={
+                "dispatch_status": "dispatched",
+                "dispatch_queued_count": dispatch["queued_count"],
+                "dispatch_message_ids": dispatch["message_ids"],
+            }
+        )
+
+    def record_dispatch(
+        self,
+        *,
+        chat_message_id: int,
+        team_id: str,
+        client_message_id: str | None,
+        queued_count: int,
+        message_ids: list[int],
+        conn: sqlite3.Connection | None = None,
+    ) -> dict:
+        sql = """
+            INSERT INTO chat_dispatches (
+                chat_message_id, team_id, client_message_id, queued_count, message_ids, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_message_id) DO UPDATE SET
+                team_id = excluded.team_id,
+                client_message_id = excluded.client_message_id,
+                queued_count = excluded.queued_count,
+                message_ids = excluded.message_ids,
+                updated_at = CURRENT_TIMESTAMP
+        """
+        params = (chat_message_id, team_id, client_message_id, queued_count, json.dumps(message_ids, ensure_ascii=False))
+        if conn is None:
+            self.db.execute(sql, params)
+        else:
+            conn.execute(sql, params)
+        dispatch = self.get_dispatch(chat_message_id, conn=conn)
+        assert dispatch is not None
+        return dispatch
 
     def list(
         self,
@@ -52,7 +162,7 @@ class ChatService:
             """,
             [*params, limit],
         )
-        return list(reversed([self._to_message(row) for row in rows]))
+        return list(reversed([self._annotate_dispatch(self._to_message(row)) for row in rows]))
 
     def archives(self) -> list[dict]:
         rows = self.db.fetch_all(
@@ -104,5 +214,6 @@ class ChatService:
             team_id=row["team_id"],
             sender=row["sender"],
             message=row["message"],
+            client_message_id=row["client_message_id"] if "client_message_id" in row.keys() else None,
             created_at=row["created_at"],
         )

@@ -15,3 +15,11 @@ class TeamCreate(BaseModel):
 
 class Team(TeamCreate):
     pass
+
+
+class TeamDispatchCreate(BaseModel):
+    message: str
+    sender: str = "user"
+    chat_message_id: int | None = Field(default=None, alias="chatMessageId")
+
+    model_config = ConfigDict(populate_by_name=True)

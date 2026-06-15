@@ -1,6 +1,6 @@
 from pocketStudio.models.enums import TeamMode, MessageStatus
 from pocketStudio.models.agent import AgentCreate, Agent, AgentMessage
-from pocketStudio.models.team import TeamCreate, Team
+from pocketStudio.models.team import TeamCreate, Team, TeamDispatchCreate
 from pocketStudio.models.queue import MessageCreate, QueueMessage, QueueStatus, ResponseJob
 from pocketStudio.models.orchestration import AgentRun, OrchestrationResult
 from pocketStudio.models.chat import ChatMessageCreate, ChatMessage
@@ -26,6 +26,7 @@ __all__ = [
     "AgentMessage",
     "TeamCreate",
     "Team",
+    "TeamDispatchCreate",
     "MessageCreate",
     "QueueMessage",
     "QueueStatus",
