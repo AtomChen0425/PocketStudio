@@ -750,6 +750,30 @@ Class, data model, service object, or exception type.
 |---|---|
 | `async run(self, request: ProviderRequest)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 
+### `pocketStudio/providers/nanobot.py`
+
+Agent provider and CLI/Subprocess adapters that isolate external model or command execution details.
+
+#### `NanobotProvider(AgentProvider)`
+
+Class, data model, service object, or exception type.
+
+| Method | Usage |
+|---|---|
+| `__init__(self, *, db: Database \| None=None, config_path: str \| Path \| None=None)` | Python object lifecycle or protocol method. |
+| `setup_workspace(self, workspace: Path)` | Updates or persists an existing resource. |
+| `async run(self, request: ProviderRequest)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `async reset_agent(self, agent_id: str)` | Helper method for its service or type. |
+| `_session_key_for(self, agent_id: str, workspace: Path)` | Helper method for its service or type. |
+| `_workspace_from_db(self, agent_id: str)` | Helper method for its service or type. |
+| `_session_key_path(workspace: Path)` | Helper method for its service or type. |
+| `_config_path_for_workspace(workspace: Path)` | Helper method for its service or type. |
+| `_load_sdk()` | Helper method for its service or type. |
+| `_safe_model_dump(value)` | Helper method for its service or type. |
+| `_tool_call_payload(tool_call)` | Builds API or compatibility-layer response/request payloads. |
+| `_tool_result_payload(tool_result)` | Builds API or compatibility-layer response/request payloads. |
+| `_stringify(value)` | Helper method for its service or type. |
+
 ### `pocketStudio/providers/openai_compatible.py`
 
 Agent provider and CLI/Subprocess adapters that isolate external model or command execution details.
