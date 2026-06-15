@@ -29,11 +29,7 @@ class AgentProvider(ABC):
 
     def setup_workspace(
         self,
-        workspace: Path,
-        *,
-        agent: Agent | None = None,
-        system_prompt: str | None = None,
-        project_workspace: Path | None = None,
+        workspace: Path
     ) -> None:
         """Set up the workspace for the provider."""
         pass

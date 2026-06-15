@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import re
 import shutil
 from hashlib import sha256
@@ -88,6 +89,17 @@ class AgentService:
                 int(payload.heartbeat_enabled),
                 heartbeat_interval,
             ),
+        )
+        now_ms = int(time.time() * 1000)
+        self.db.execute(
+            """
+            INSERT INTO heartbeat_state (agent_id, last_sent_at, last_message_id)
+            VALUES (?, ?, NULL)
+            ON CONFLICT(agent_id) DO UPDATE SET
+              last_sent_at = excluded.last_sent_at,
+              last_message_id = heartbeat_state.last_message_id
+            """,
+            (payload.id, now_ms),
         )
         agent = self.get(payload.id)
         self._sync_agent_settings(agent)

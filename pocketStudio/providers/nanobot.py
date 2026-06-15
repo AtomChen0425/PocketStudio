@@ -29,7 +29,7 @@ class NanobotProvider(AgentProvider):
         self._session_keys: dict[str, str] = {}
         self._agent_workspaces: dict[str, Path] = {}
 
-    def setup_workspace(self, workspace: Path,system_prompt: str | None = None) -> None:
+    def setup_workspace(self, workspace: Path) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         root_skills_dir = workspace / ".agents" / "skills"
         AgentService.ensure_tool_skills_link(root_skills_dir, workspace / "skills")
@@ -39,15 +39,11 @@ class NanobotProvider(AgentProvider):
                 shutil.copy2(_BUILTIN_NANOBOT_CONFIG_TEMPLATE_PATH, config_path)
             else:
                 config_path.write_text("{}", encoding="utf-8")
-        if system_prompt:
-            prompt_path = workspace / "AGENTS.md"
-            if not prompt_path.exists() or not prompt_path.read_text(encoding="utf-8").strip():
-                prompt_path.write_text(system_prompt, encoding="utf-8")
 
     async def run(self, request: ProviderRequest) -> ProviderResponse:
         Nanobot, AgentHook = self._load_sdk()
         workspace = request.agent.workspace.resolve()
-        self.setup_workspace(workspace, system_prompt=request.agent.system_prompt or None)
+        self.setup_workspace(workspace)
         self._sync_config_for_agent(workspace, request.agent)
         self._agent_workspaces[request.agent.id] = workspace
         session_key = self._session_key_for(request.agent.id, workspace)
@@ -83,8 +79,12 @@ class NanobotProvider(AgentProvider):
                 for tool_result in getattr(context, "tool_results", []) or []:
                     payload = provider._tool_result_payload(tool_result)
                     request.progress(payload)
-
-        bot = Nanobot.from_config(config_path=config_path, workspace=workspace)
+        system_prompt = request.agent.system_prompt or request.agent.role
+        if system_prompt:
+            prompt_path = workspace / "AGENTS.md"
+            if not prompt_path.exists() or not prompt_path.read_text(encoding="utf-8").strip():
+                prompt_path.write_text(system_prompt, encoding="utf-8")
+        bot = Nanobot.from_config(config_path=config_path, workspace=workspace)        
         try:
             result = await bot.run(
                 request.input,
@@ -167,7 +167,7 @@ class NanobotProvider(AgentProvider):
 
     @staticmethod
     def _session_key_path(workspace: Path) -> Path:
-        return workspace / "sessions_key.txt"
+        return workspace / "sessions_key"
 
     @staticmethod
     def _config_path_for_workspace(workspace: Path) -> Path:

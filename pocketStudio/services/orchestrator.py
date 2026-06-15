@@ -838,7 +838,7 @@ class Orchestrator:
             project_workspace=project_workspace,
         )
         if agent.id not in self._initialized_workspaces:
-            provider.setup_workspace(agent.workspace,system_prompt=system_prompt)
+            provider.setup_workspace(agent.workspace)
             self._initialized_workspaces.add(agent.id)
             
         message_id_text = str(message_id) if message_id is not None else None

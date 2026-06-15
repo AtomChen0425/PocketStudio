@@ -89,7 +89,7 @@ def test_nanobot_provider_uses_workspace_session_and_hooks(monkeypatch) -> None:
             provider="nanobot",
             workspace=agent_workspace,
         )
-
+        provider.setup_workspace(agent_workspace)
         progress: list[dict] = []
         response = asyncio.run(provider.run(ProviderRequest(agent=agent, input="Hello", progress=progress.append)))
 
@@ -99,7 +99,7 @@ def test_nanobot_provider_uses_workspace_session_and_hooks(monkeypatch) -> None:
         assert any(item["providerEventType"] == "progress" for item in progress)
         assert any(item["providerEventType"] == "tool_call" for item in progress)
         assert any(item["providerEventType"] == "tool_result" for item in progress)
-        assert (agent_workspace / ".pocketStudio" / "nanobot" / "session_key").read_text(encoding="utf-8") == "nanobot-agent"
+        assert (agent_workspace / "sessions_key").read_text(encoding="utf-8") == "nanobot-agent"
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
@@ -127,10 +127,10 @@ def test_nanobot_provider_reset_rotates_session_key(monkeypatch) -> None:
         )
 
         asyncio.run(provider.run(ProviderRequest(agent=agent, input="Hello")))
-        first_key = (agent_workspace / ".pocketStudio" / "nanobot" / "session_key").read_text(encoding="utf-8")
+        first_key = (agent_workspace / "sessions_key").read_text(encoding="utf-8")
 
         assert asyncio.run(provider.reset_agent(agent.id)) is True
-        second_key = (agent_workspace / ".pocketStudio" / "nanobot" / "session_key").read_text(encoding="utf-8")
+        second_key = (agent_workspace / "sessions_key").read_text(encoding="utf-8")
         assert second_key != first_key
         assert second_key.startswith("nanobot-agent:")
     finally:
@@ -146,23 +146,10 @@ def test_nanobot_provider_setup_workspace_creates_state_dir() -> None:
 
     try:
         provider.setup_workspace(workspace)
-        assert (workspace / ".pocketStudio" / "nanobot").is_dir()
-        assert (workspace / ".pocketStudio" / "nanobot" / "config.json").is_file()
+        assert (workspace ).is_dir()
+        assert (workspace /"config.json").is_file()
         if template.exists():
-            assert (workspace / ".pocketStudio" / "nanobot" / "config.json").read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
-    finally:
-        shutil.rmtree(home, ignore_errors=True)
-
-
-def test_nanobot_provider_setup_workspace_writes_agents_md() -> None:
-    home = Path(".pytest-tmp") / f"nanobot-{uuid.uuid4().hex}"
-    home.mkdir(parents=True)
-    provider = NanobotProvider()
-    workspace = home / "workspace"
-
-    try:
-        provider.setup_workspace(workspace, system_prompt="SYSTEM PROMPT")
-        assert (workspace / "AGENTS.md").read_text(encoding="utf-8") == "SYSTEM PROMPT"
+            assert (workspace / "config.json").read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
@@ -199,7 +186,7 @@ def test_nanobot_provider_syncs_agent_config_fields(monkeypatch) -> None:
         provider = NanobotProvider(db=db)
         asyncio.run(provider.run(ProviderRequest(agent=agent, input="Hello")))
 
-        config_path = agent.workspace / ".pocketStudio" / "nanobot" / "config.json"
+        config_path = agent.workspace /  "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["agents"]["defaults"]["provider"] == "openai"
         assert config["agents"]["defaults"]["model"] == "gpt-5.5"
