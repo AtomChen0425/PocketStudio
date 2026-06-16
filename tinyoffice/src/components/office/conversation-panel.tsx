@@ -235,7 +235,7 @@ export function ConversationPanel({
 
   const visibleConversation = useMemo(() => {
     if (conversationFilter === "all") {
-      return conversationEntries.filter((entry) => entry.role === "user").slice(-60);
+      return conversationEntries.filter((entry) => entry.role === "user").slice(-200);
     }
     if (conversationFilter.startsWith("team:")) {
       const teamId = conversationFilter.slice("team:".length);
@@ -246,14 +246,14 @@ export function ConversationPanel({
           if (entry.targetAgents.includes(teamId)) return true;
           return entry.targetAgents.some((target) => memberIds.includes(target));
         })
-        .slice(-60);
+        .slice(-200);
     }
     return conversationEntries
       .filter((entry) => {
         if (entry.role !== "user") return false;
         return entry.targetAgents.includes(conversationFilter);
       })
-      .slice(-60);
+      .slice(-200);
   }, [conversationEntries, conversationFilter, teams]);
 
   const visibleExecutionRuns = useMemo(() => {

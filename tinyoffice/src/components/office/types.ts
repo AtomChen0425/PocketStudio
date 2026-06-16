@@ -86,6 +86,8 @@ export type AgentWorkSession = {
 
 export const AGENT_COLORS = ["#a3e635", "#84cc16", "#f59e0b", "#14b8a6", "#eab308", "#22c55e"];
 export const AGENT_SESSION_RELEASE_MS = 6200;
+export const OFFICE_HISTORY_LIMIT = 200;
+export const OFFICE_BUBBLE_RETENTION_MS = 12 * 60 * 60 * 1000;
 export const OFFICE_STATION_COUNT = 8;
 export const ARCHIVE_BUTTONS = [
   { id: "logs", label: "Logs" },
