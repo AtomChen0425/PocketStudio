@@ -198,6 +198,8 @@ export function ConversationPanel({
           startedAt: event.timestamp,
           updatedAt: event.timestamp,
           summary: "",
+          finalMessage: "",
+          finalMessageAt: undefined,
           events: [],
         };
         runs.set(key, run);
@@ -205,6 +207,13 @@ export function ConversationPanel({
       run.events.push(event);
       run.updatedAt = Math.max(run.updatedAt, event.timestamp);
       run.startedAt = Math.min(run.startedAt, event.timestamp);
+      if (event.type === "agent:response") {
+        const content = typeof event.content === "string" ? event.content : "";
+        if (content) {
+          run.finalMessage = content;
+          run.finalMessageAt = event.timestamp;
+        }
+      }
       if (event.type === "message:failed") {
         run.status = "failed";
       } else if (event.type === "agent:response" || event.type === "message:done") {
@@ -222,21 +231,23 @@ export function ConversationPanel({
   }, [runtimeEvents]);
 
   const visibleConversation = useMemo(() => {
-    if (conversationFilter === "all") return conversationEntries.slice(-60);
+    if (conversationFilter === "all") {
+      return conversationEntries.filter((entry) => entry.role === "user").slice(-60);
+    }
     if (conversationFilter.startsWith("team:")) {
       const teamId = conversationFilter.slice("team:".length);
       const memberIds = teams?.[teamId]?.agents ?? [];
       return conversationEntries
         .filter((entry) => {
+          if (entry.role !== "user") return false;
           if (entry.targetAgents.includes(teamId)) return true;
-          if (entry.agentId && memberIds.includes(entry.agentId)) return true;
           return entry.targetAgents.some((target) => memberIds.includes(target));
         })
         .slice(-60);
     }
     return conversationEntries
       .filter((entry) => {
-        if (entry.role === "agent") return entry.agentId === conversationFilter;
+        if (entry.role !== "user") return false;
         return entry.targetAgents.includes(conversationFilter);
       })
       .slice(-60);
@@ -411,6 +422,15 @@ export function ConversationPanel({
                           runId={item.run.runId}
                           sessionId={item.run.sessionId}
                         />
+                      </div>
+                      <div className="mt-2">
+                        {item.run.finalMessage ? (
+                          <Markdown className="prose prose-sm mt-0.5 max-w-none break-words text-[#241b16]/90 [&_span.rounded-sm]:bg-[#d4c4a8] [&_span.rounded-sm]:text-[#5c4637]">
+                            {item.run.finalMessage}
+                          </Markdown>
+                        ) : (
+                          <div className="text-sm text-[#6f5c4b]">Working...</div>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -71,6 +71,8 @@ export type AgentExecutionRun = {
   updatedAt: number;
   completedAt?: number;
   summary: string;
+  finalMessage?: string;
+  finalMessageAt?: number;
   events: import("@/lib/api").OfficeEvent[];
 };
 

@@ -234,6 +234,7 @@ export interface AgentMessage {
 export function isInternalAgentInput(message: Pick<AgentMessage, "role" | "sender">): boolean {
   if (message.role !== "user") return false;
   return (
+    message.sender === "System" ||
     message.sender === "orchestrator" ||
     message.sender.startsWith("workflow:") ||
     message.sender.startsWith("team:") ||
