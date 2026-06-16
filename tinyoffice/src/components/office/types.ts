@@ -202,3 +202,30 @@ export function summarizeExecutionEvent(event: import("@/lib/api").OfficeEvent) 
   if (typeof event.tool === "string" && event.tool.trim()) return `tool ${event.tool}`;
   return event.type;
 }
+
+function progressDots(frame?: number) {
+  if (typeof frame !== "number" || !Number.isFinite(frame)) return "...";
+  return ".".repeat((Math.abs(Math.floor(frame)) % 3) + 1);
+}
+
+export function describeRunProgress(events: import("@/lib/api").OfficeEvent[], frame?: number) {
+  if (events.length === 0) return `Starting${progressDots(frame)}`;
+  const latest = [...events].sort((left, right) => right.timestamp - left.timestamp)[0];
+  if (!latest) return `Starting${progressDots(frame)}`;
+  const suffix = progressDots(frame);
+  if (latest.type === "message:processing") return `Reading input${suffix}`;
+  if (latest.type === "agent:invoke") return `Invoking ${latest.provider || "agent"}${suffix}`;
+  if (latest.type === "agent:tool_call") {
+    if (typeof latest.tool === "string" && latest.tool.trim()) return `Calling ${latest.tool}${suffix}`;
+    return `Calling tool${suffix}`;
+  }
+  if (latest.type === "agent:tool_result") return `Tool result received${suffix}`;
+  if (latest.type === "agent:stdout") return `Streaming output${suffix}`;
+  if (latest.type === "agent:stderr") return `Handling error output${suffix}`;
+  if (latest.type === "agent:progress") {
+    const summary = summarizeExecutionEvent(latest);
+    return summary === latest.type ? `Working${suffix}` : summary;
+  }
+  const summary = summarizeExecutionEvent(latest);
+  return summary === latest.type ? `Working${suffix}` : summary;
+}

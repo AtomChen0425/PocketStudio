@@ -22,6 +22,7 @@ import { PIXEL_SCENE_LAYOUT } from "./pixel-office-scene";
 import { isInternalAgentInput, sendMessage, type AgentConfig, type AgentMessage, type OfficeEvent, type TeamConfig } from "@/lib/api";
 import { timeAgo } from "@/lib/hooks";
 import { AgentExecutionCard } from "./agent-execution-card";
+import { describeRunProgress } from "./types";
 import type { AgentExecutionRun, ConversationEntry, LiveBubble } from "./types";
 
 const AGENT_COLORS = [
@@ -44,6 +45,7 @@ type ConversationPanelProps = {
   agentHistories: Record<string, AgentMessage[]> | null;
   bubbles: LiveBubble[];
   runtimeEvents: OfficeEvent[];
+  animationTick?: number;
   selectedAgentId?: string | null;
 };
 
@@ -54,6 +56,7 @@ export function ConversationPanel({
   agentHistories,
   bubbles,
   runtimeEvents,
+  animationTick,
   selectedAgentId,
 }: ConversationPanelProps) {
   const [chatInput, setChatInput] = useState("");
@@ -258,6 +261,8 @@ export function ConversationPanel({
     const memberIds = teamId ? teams?.[teamId]?.agents ?? [] : [];
     return executionRuns.filter((run) => {
       const runAgentId = run.agentId ?? "";
+      const hasRenderableEvent = run.events.some((event) => !event.type.startsWith("heartbeat:"));
+      if (!hasRenderableEvent) return false;
       if (conversationFilter === "all") return true;
       if (conversationFilter.startsWith("team:")) {
         return memberIds.includes(runAgentId);
@@ -421,6 +426,7 @@ export function ConversationPanel({
                           messageId={item.run.messageId}
                           runId={item.run.runId}
                           sessionId={item.run.sessionId}
+                          animationTick={animationTick}
                         />
                       </div>
                       <div className="mt-2">
@@ -429,7 +435,7 @@ export function ConversationPanel({
                             {item.run.finalMessage}
                           </Markdown>
                         ) : (
-                          <div className="text-sm text-[#6f5c4b]">Working...</div>
+                          <div className="text-sm text-[#6f5c4b]">{describeRunProgress(item.run.events, animationTick)}</div>
                         )}
                       </div>
                     </div>
