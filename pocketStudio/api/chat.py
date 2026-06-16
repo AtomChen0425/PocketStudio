@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, Query
 
-from pocketStudio.core.dependencies import get_chat_service, get_orchestrator
-from pocketStudio.models import ChatMessage, ChatMessageCreate
+from pocketStudio.core.dependencies import get_chat_service, get_queue_service
+from pocketStudio.models import ChatMessage, ChatMessageCreate, MessageCreate
 from pocketStudio.services.chat_service import ChatService
-from pocketStudio.services.orchestrator import Orchestrator
+from pocketStudio.services.queue_service import QueueService
 
 router = APIRouter(prefix="/chatroom", tags=["chatroom"])
 
@@ -45,7 +45,7 @@ def send_chat(
     team_id: str,
     payload: ChatMessageCreate,
     service: ChatService = Depends(get_chat_service),
-    orchestrator: Orchestrator = Depends(get_orchestrator),
+    queue: QueueService = Depends(get_queue_service),
 ) -> dict:
     sender = "user" if payload.sender == "api" else payload.sender
     chat_payload = ChatMessageCreate(
@@ -65,14 +65,28 @@ def send_chat(
             dispatch_result: dict | None = None
             existing_dispatch = service.get_dispatch(message.id, conn=conn)
             if existing_dispatch is None:
-                dispatch_result = orchestrator.dispatch_team_message(
-                    team_id,
-                    payload.message,
-                    sender=sender,
-                    chat_message_id=message.id,
+                team_message = queue.enqueue(
+                    MessageCreate(
+                        target=f"@team:{team_id}",
+                        content=payload.message,
+                        sender=sender,
+                        metadata={
+                            "channel": "chatroom",
+                            "teamId": team_id,
+                            "chatMessageId": message.id,
+                            "clientMessageId": payload.client_message_id,
+                        },
+                    ),
                     conn=conn,
                     emit_event=False,
                 )
+                dispatch_result = {
+                    "ok": True,
+                    "teamId": team_id,
+                    "queued": 1,
+                    "messageIds": [team_message.id],
+                    "queuedMessages": [team_message.model_dump()],
+                }
                 existing_dispatch = service.record_dispatch(
                     chat_message_id=message.id,
                     team_id=team_id,

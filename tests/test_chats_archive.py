@@ -142,7 +142,7 @@ def test_chatroom_send_is_atomic_and_idempotent() -> None:
         assert first.status_code == 200
         assert first.json()["ok"] is True
         assert first.json()["chatMessage"]["from_agent"] == "user"
-        assert first.json()["dispatch"]["queued"] == 2
+        assert first.json()["dispatch"]["queued"] == 1
         assert first.json()["chatMessage"]["dispatch_status"] == "dispatched"
         assert second.status_code == 200
         assert second.json()["chatMessage"]["id"] == first.json()["chatMessage"]["id"]
@@ -152,8 +152,9 @@ def test_chatroom_send_is_atomic_and_idempotent() -> None:
         chatroom_messages = [
             item for item in messages if item["metadata"].get("teamId") == team_id and item["metadata"].get("channel") == "chatroom"
         ]
-        assert len(chatroom_messages) == 2
-        assert {item["target"] for item in chatroom_messages} == {f"@agent:{team_id}-a", f"@agent:{team_id}-b"}
+        assert len(chatroom_messages) == 1
+        assert chatroom_messages[0]["target"] == f"@team:{team_id}"
+        assert chatroom_messages[0]["metadata"].get("chatMessageId") == first.json()["chatMessage"]["id"]
 
         chat_history = client.get(f"/api/chatroom/{team_id}").json()
         assert sum(1 for message in chat_history if message["client_message_id"] == client_message_id) == 1
