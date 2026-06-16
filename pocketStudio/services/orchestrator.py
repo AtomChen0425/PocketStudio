@@ -291,7 +291,7 @@ class Orchestrator:
         if self._is_chatroom_origin(message):
             self._post_chatroom_run_outputs(team, runs)
         else:
-            self.chat.post(team.id, ChatMessageCreate(sender="TeamManager", message=output))
+            self.chat.post(team.id, ChatMessageCreate(sender=leader.name, message=output))
         return OrchestrationResult(message_id=message.id, target=message.target, runs=runs, output=output)
 
     async def _run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow) -> OrchestrationResult:

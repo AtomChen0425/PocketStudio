@@ -79,14 +79,14 @@ export function ConversationPanel({
     if (!chatInput.trim() || sending) return;
     setSending(true);
     try {
+      const content = chatInput.trim();
       const target =
         conversationFilter.startsWith("team:")
           ? `@${conversationFilter}`
           : conversationFilter !== "all"
             ? `@${conversationFilter}`
             : "";
-      const message = target && !chatInput.trim().startsWith("@") ? `${target} ${chatInput.trim()}` : chatInput.trim();
-
+      const message = target && !content.startsWith("@") ? `${target} ${content}` : content;
       await sendMessage({ message, sender: "Web", channel: "web" });
       setChatInput("");
     } catch {

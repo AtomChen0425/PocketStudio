@@ -52,6 +52,10 @@ export type ConversationEntry = {
   messageId?: string;
   runId?: string;
   sessionId?: string;
+  localStatus?: "sending" | "failed" | "dispatched" | "stored";
+  dispatchStatus?: string | null;
+  dispatchQueuedCount?: number | null;
+  dispatchMessageIds?: number[];
 };
 
 export type AgentExecutionRunStatus = "running" | "completed" | "failed";
