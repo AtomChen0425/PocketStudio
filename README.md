@@ -484,6 +484,7 @@ PocketStudio is evolving toward smoother multi-agent collaboration across teams,
 ## Credits
 
 - Inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi).
+- [Nanobot](https://github.com/HKUDS/nanobot)
 - Built with FastAPI, Pydantic, SQLite, LangGraph, and provider adapters for local and CLI-backed agents.
 - TinyOffice frontend adapted for the pocketStudio runtime.
 
