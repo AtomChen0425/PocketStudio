@@ -1,4 +1,5 @@
 # PocketStudio
+![ICON](docs/assets/ICON.jpg)
 
 Multi-agent, multi-team, multi-channel AI assistant runtime built with Python and FastAPI.
 
