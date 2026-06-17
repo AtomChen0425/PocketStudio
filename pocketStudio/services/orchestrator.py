@@ -53,6 +53,8 @@ class WorkflowState(TypedDict):
 
 
 class Orchestrator:
+    _WORKFLOW_FULL_CONTEXT_LIMIT = 3
+
     def __init__(
         self,
         agents: AgentService,
@@ -316,7 +318,7 @@ class Orchestrator:
         )
         state = await compiled_graph.ainvoke(
             {"original_request": message.content, "outputs": {}, "runs_by_node": {}, "runs": [], "run_order": []},
-            {"recursion_limit": 100},
+            {"recursion_limit": 50},
         )
         runs = state.get("runs", [])
         outputs = state["outputs"]
@@ -339,16 +341,17 @@ class Orchestrator:
         workflow_id: str,
         original_request: str,
         node,
+        node_name: str,
         predecessor_ids: list[str],
         outputs: dict[str, str],
     ) -> str:
-        predecessor_text = "\n\n".join(f"## {source}\n{outputs[source]}" for source in predecessor_ids if source in outputs)
+        predecessor_text = Orchestrator._format_workflow_predecessors(predecessor_ids, outputs)
         if node.input_template:
             try:
                 return node.input_template.format(
                     team_id=team.id,
                     workflow_id=workflow_id,
-                    node_id=node.id,
+                    node_name=node_name,
                     agent_id=node.agent_id,
                     message=original_request,
                     predecessor_outputs=predecessor_text,
@@ -356,11 +359,49 @@ class Orchestrator:
             except KeyError as exc:
                 raise ValueError(f"Workflow node '{node.id}' inputTemplate references unknown field: {exc}") from exc
         chunks = [f"Team #{team.id} workflow '{workflow_id}' request:\n{original_request}"]
+        if node_name:
+            chunks.append(f"Workflow node:\n{node_name}")
         if node.prompt:
             chunks.append(f"Node instruction:\n{node.prompt}")
         if predecessor_text:
             chunks.append(f"Upstream results:\n{predecessor_text}")
         return "\n\n------\n\n".join(chunks)
+
+    @classmethod
+    def _format_workflow_predecessors(cls, predecessor_ids: list[str], outputs: dict[str, str]) -> str:
+        if not predecessor_ids:
+            return ""
+
+        recent_ids = predecessor_ids[-cls._WORKFLOW_FULL_CONTEXT_LIMIT :]
+        older_ids = predecessor_ids[:-cls._WORKFLOW_FULL_CONTEXT_LIMIT]
+
+        chunks: list[str] = []
+        for predecessor_id in recent_ids:
+            if predecessor_id not in outputs:
+                continue
+            chunks.append(f"## {predecessor_id}\n{outputs[predecessor_id]}")
+
+        if older_ids:
+            summarized = []
+            for predecessor_id in older_ids:
+                if predecessor_id not in outputs:
+                    continue
+                summarized.append(f"- {predecessor_id}: {cls._summarize_workflow_output(outputs[predecessor_id])}")
+            if summarized:
+                chunks.append("## Earlier upstream summary\n" + "\n".join(summarized))
+
+        return "\n\n".join(chunks)
+
+    @staticmethod
+    def _summarize_workflow_output(text: str, max_length: int = 240) -> str:
+        
+        '''TODO: use LLM summarize'''
+        cleaned = " ".join(line.strip() for line in text.splitlines() if line.strip())
+        if not cleaned:
+            return "(empty)"
+        if len(cleaned) <= max_length:
+            return cleaned
+        return f"{cleaned[: max_length - 1].rstrip()}…"
 
     def _langchain_runnable_for_agent(self, agent: Agent):
         try:
@@ -410,11 +451,22 @@ class Orchestrator:
             runnable = self._langchain_runnable_for_agent(agent) if agent is not None else None
 
             async def run_node(state: WorkflowState, *, node=node, agent=agent, runnable=runnable) -> dict:
+                if agent is not None:
+                    node_name = agent.name
+                elif node.type == "start":
+                    node_name = "Start"
+                elif node.type == "end":
+                    node_name = "End"
+                elif node.type == "tool":
+                    node_name = node.prompt or "Tool"
+                else:
+                    node_name = node.prompt or node.id
                 input_text = self._workflow_node_input(
                     team,
                     workflow_id,
                     state["original_request"],
                     node,
+                    node_name,
                     predecessors[node.id],
                     state["outputs"],
                 )
@@ -430,7 +482,7 @@ class Orchestrator:
                         }
                     )
                     self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
-                    await self._handle_team_tags(team, run, message, agents, enqueue_mentions=team.max_rounds <= 1)
+                    # await self._handle_team_tags(team, run, message, agents, enqueue_mentions=team.max_rounds <= 1)
                 elif node.type == "start":
                     run = AgentRun(agent_id=node.id, input=input_text, output=state["original_request"])
                 elif node.type == "end":
