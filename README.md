@@ -102,7 +102,7 @@ Please provide the structural layout and the main page.tsx code with smooth tran
 - Python 3.11+
 - Node.js 20+ for the TinyOffice frontend
 - Windows PowerShell or CMD, or a compatible shell on another OS
-- Optional provider CLIs/API keys for Codex, Claude, OpenCode, Nanobot, or OpenAI-compatible providers
+- Optional provider CLIs/API keys for Codex, Nanobot, or OpenAI-compatible providers
 
 ### Installation and First Run
 
