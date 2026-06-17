@@ -1,12 +1,13 @@
-# PocketStudio
-![ICON](docs/assets/ICON.jpg)
 
-Multi-agent, multi-team, multi-channel AI assistant runtime built with Python and FastAPI.
-
-Run teams of AI agents with isolated workspaces, persistent queues, project tasks, chat rooms, scheduled work, heartbeat monitoring, and a browser dashboard.
+<div align="center">
+  <img src="./docs/assets/ICON.jpg" alt="PocketStudio" width="200" />
+  <h1>PocketStudio</h1>
+  <p><strong>Multi-agent, multi-team, multi-channel AI assistant runtime built with Python and FastAPI.</strong></p>
+  <p>Run teams of AI agents with isolated workspaces, persistent queues, project tasks, chat rooms, scheduled work, heartbeat monitoring, and a browser dashboard.</p>
+  <
+</div>
 
 ![PocketStudio working dashboard](docs/assets/Working.png)
-
 
 ## Features
 
