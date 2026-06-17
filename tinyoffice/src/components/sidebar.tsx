@@ -42,7 +42,7 @@ export function Sidebar() {
       {/* Header */}
       <div className="flex items-center gap-2.5 px-4 pt-4 pb-2">
         <Image src="/icon.png" alt="pocketStudio" width={24} height={24} className="h-6 w-6" />
-        <span className="text-base font-bold tracking-tight flex-1">pocketStudio</span>
+        <span className="text-base font-bold tracking-tight flex-1">PocketStudio</span>
         <button
           onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
           className="p-1 text-muted-foreground hover:text-foreground transition-colors"
