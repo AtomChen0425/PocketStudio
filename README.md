@@ -13,7 +13,6 @@
 
 This repository is a Python/FastAPI implementation inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi). For upstream TinyAGI community links, see the [TinyAGI](https://github.com/TinyAGI/tinyagi) project.
 
-Contributions should keep service boundaries clear: API routes call services, orchestration remains a thin facade, and long-running provider work stays behind provider adapters.
 
 ## Features
 
