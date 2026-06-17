@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from pocketStudio.core.database import Database
-from pocketStudio.models import ChatMessage, ChatMessageCreate
+from pocketStudio.models import Agent, ChatMessage, ChatMessageCreate, MessageCreate, QueueMessage, Team
 from pocketStudio.services.event_service import EventService
+from pocketStudio.utils.tag_parser import strip_tags
+
+if TYPE_CHECKING:
+    from pocketStudio.services.queue_service import QueueService
 
 
 class ChatService:
@@ -136,6 +141,126 @@ class ChatService:
         dispatch = self.get_dispatch(chat_message_id, conn=conn)
         assert dispatch is not None
         return dispatch
+
+    def broadcast_chatroom(
+        self,
+        queue: "QueueService",
+        team: Team,
+        from_agent: str,
+        content: str,
+        agents: list[Agent],
+        parent: QueueMessage,
+    ) -> int:
+        delivered = 0
+        agent_ids = {agent.id for agent in agents}
+        chat_message = f"[Chat room #{team.id} - @{from_agent}]:\n{content}"
+        for teammate_id in team.agent_ids:
+            if teammate_id == from_agent or teammate_id not in agent_ids:
+                continue
+            queue.enqueue(
+                MessageCreate(
+                    target=f"@agent:{teammate_id}",
+                    content=chat_message,
+                    sender=f"chatroom:{team.id}:{from_agent}",
+                    metadata=self.team_child_metadata(
+                        parent,
+                        team=team,
+                        from_agent=from_agent,
+                        kind="chatroom",
+                        to_agent=teammate_id,
+                    ),
+                )
+            )
+            delivered += 1
+        return delivered
+
+    def dispatch_team_message(
+        self,
+        queue: "QueueService",
+        team: Team,
+        message: str,
+        *,
+        sender: str = "user",
+        chat_message_id: int | None = None,
+        conn: sqlite3.Connection | None = None,
+        emit_event: bool = True,
+    ) -> dict:
+        chat_message = f"[Chat room #{team.id} - @{sender}]:\n{message}"
+        delivered = 0
+        message_ids: list[int] = []
+        queued_messages: list[dict] = []
+        for teammate_id in team.agent_ids:
+            if sender in team.agent_ids and teammate_id == sender:
+                continue
+            metadata = self.team_child_metadata(
+                None,
+                team=team,
+                from_agent=sender,
+                kind="chatroom",
+                to_agent=teammate_id,
+            )
+            metadata["channel"] = "chatroom"
+            if chat_message_id is not None:
+                metadata["parentMessageId"] = f"chat:{chat_message_id}"
+            queued = queue.enqueue(
+                MessageCreate(
+                    target=f"@agent:{teammate_id}",
+                    content=chat_message,
+                    sender=sender,
+                    metadata=metadata,
+                ),
+                conn=conn,
+                emit_event=False if conn is not None else True,
+            )
+            message_ids.append(queued.id)
+            queued_messages.append(queued.model_dump())
+            delivered += 1
+        if emit_event:
+            self.events.emit(
+                "team.dispatch",
+                {
+                    "team_id": team.id,
+                    "from_agent": sender,
+                    "delivered": delivered,
+                    "message_id": chat_message_id,
+                    "message_ids": message_ids,
+                },
+            )
+        return {"ok": True, "teamId": team.id, "queued": delivered, "messageIds": message_ids, "queuedMessages": queued_messages}
+
+    def post_chatroom_run_outputs(self, team: Team, runs: list) -> None:
+        for run in runs:
+            message = strip_tags(run.output, "#").strip()
+            if message:
+                self.post(team.id, ChatMessageCreate(sender=run.agent_id, message=message))
+
+    @staticmethod
+    def is_chatroom_origin(message: QueueMessage) -> bool:
+        return message.metadata.get("channel") == "chatroom" or message.metadata.get("teamId")
+
+    @staticmethod
+    def team_child_metadata(
+        parent: QueueMessage | None,
+        *,
+        team: Team,
+        from_agent: str,
+        kind: str,
+        to_agent: str,
+    ) -> dict:
+        parent_metadata = parent.metadata if parent else {}
+        metadata = {
+            "kind": kind,
+            "teamId": team.id,
+            "fromAgent": from_agent,
+            "toAgent": to_agent,
+            "parentMessageId": str(parent.id) if parent else None,
+            "parentTarget": parent.target if parent else None,
+            "channel": parent_metadata.get("channel", "team"),
+            "sender": parent.sender if parent else "",
+            "senderId": parent_metadata.get("senderId") or parent_metadata.get("sender_id"),
+            "projectId": parent_metadata.get("projectId") or parent_metadata.get("project_id"),
+        }
+        return {key: value for key, value in metadata.items() if value is not None}
 
     def list(
         self,

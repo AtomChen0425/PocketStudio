@@ -51,7 +51,8 @@ FastAPI route layer. Keep HTTP validation, response shaping, and exception mappi
 |---|---|
 | `_chatroom_payload(message: ChatMessage)` | Builds API or compatibility-layer response/request payloads. |
 | `list_chat(team_id: str, limit: int=Query(default=100, ge=1, le=500), since: int=Query(default=0, ge=0), sender: str \| None=None, q: str \| None=None, service: ChatService=Depends(get_chat_service))` | Lists resources or query results. |
-| `post_chat(team_id: str, payload: ChatMessageCreate, service: ChatService=Depends(get_chat_service), queue: QueueService=Depends(get_queue_service), teams: TeamService=Depends(get_team_service))` | Module-level helper. Review callers and tests before changing behavior. |
+| `post_chat(team_id: str, payload: ChatMessageCreate, service: ChatService=Depends(get_chat_service))` | Module-level helper. Review callers and tests before changing behavior. |
+| `send_chat(team_id: str, payload: ChatMessageCreate, service: ChatService=Depends(get_chat_service), queue: QueueService=Depends(get_queue_service))` | Module-level helper. Review callers and tests before changing behavior. |
 
 ### `pocketStudio/api/compat.py`
 
@@ -235,6 +236,7 @@ FastAPI route layer. Keep HTTP validation, response shaping, and exception mappi
 | `add_team_member(team_id: str, agent_id: str, service: TeamService=Depends(get_team_service))` | Creates a resource, installs content, or adds a relationship. |
 | `remove_team_member(team_id: str, agent_id: str, service: TeamService=Depends(get_team_service))` | Deletes a resource or clears state. |
 | `set_team_leader(team_id: str, agent_id: str, service: TeamService=Depends(get_team_service))` | Updates or persists an existing resource. |
+| `dispatch_team_message(team_id: str, payload: TeamDispatchCreate, chat: ChatService=Depends(get_chat_service), orchestrator: Orchestrator=Depends(get_orchestrator))` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `delete_team(team_id: str, service: TeamService=Depends(get_team_service))` | Deletes a resource or clears state. |
 
 ### `pocketStudio/api/workflows.py`
@@ -385,6 +387,8 @@ Class, data model, service object, or exception type.
 | `_migrate(self, conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `_add_column(conn: sqlite3.Connection, table: str, column: str, definition: str)` | Creates a resource, installs content, or adds a relationship. |
 | `_migrate_team_mode_check(conn: sqlite3.Connection)` | Helper method for its service or type. |
+| `_migrate_agent_model_provider(conn: sqlite3.Connection)` | Helper method for its service or type. |
+| `_migrate_chat_message_client_id(conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `_backfill_task_numbers(conn: sqlite3.Connection)` | Helper method for its service or type. |
 | `execute(self, query: str, params: Iterable[Any]=())` | Helper method for its service or type. |
 | `fetch_one(self, query: str, params: Iterable[Any]=())` | Helper method for its service or type. |
@@ -591,6 +595,10 @@ Class, data model, service object, or exception type.
 
 Class, data model, service object, or exception type.
 
+#### `TeamDispatchCreate(BaseModel)`
+
+Class, data model, service object, or exception type.
+
 ### `pocketStudio/models/workflow.py`
 
 Project module.
@@ -766,8 +774,11 @@ Class, data model, service object, or exception type.
 | `async reset_agent(self, agent_id: str)` | Helper method for its service or type. |
 | `_session_key_for(self, agent_id: str, workspace: Path)` | Helper method for its service or type. |
 | `_workspace_from_db(self, agent_id: str)` | Helper method for its service or type. |
+| `_sync_config_for_agent(self, workspace: Path, agent)` | Helper method for its service or type. |
 | `_session_key_path(workspace: Path)` | Helper method for its service or type. |
 | `_config_path_for_workspace(workspace: Path)` | Helper method for its service or type. |
+| `_load_json_object(path: Path)` | Helper method for its service or type. |
+| `_write_json_object(path: Path, value: dict)` | Updates or persists an existing resource. |
 | `_load_sdk()` | Helper method for its service or type. |
 | `_safe_model_dump(value)` | Helper method for its service or type. |
 | `_tool_call_payload(tool_call)` | Builds API or compatibility-layer response/request payloads. |
@@ -871,6 +882,8 @@ Class, data model, service object, or exception type.
 | `workspace_status(self, agent_id: str, repair: bool=False)` | Helper method for its service or type. |
 | `get_system_prompt_file(self, agent_id: str)` | Reads one resource, status object, or derived view. |
 | `save_system_prompt_file(self, agent_id: str, content: str)` | Updates or persists an existing resource. |
+| `async reset_runtime(self, agent_id: str, *, providers: ProviderRegistry, events: EventService, cleared: dict[str, int] \| None=None)` | Helper method for its service or type. |
+| `async run_agent(self, agent: Agent, input_text: str, context: list[str], *, providers: ProviderRegistry, events: EventService, message_id: int \| str \| None=None, session_id: str \| None=None, run_id: str \| None=None, teams: list[Team] \| None=None, project_workspace: Path \| None=None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `get_heartbeat_file(self, agent_id: str)` | Reads one resource, status object, or derived view. |
 | `save_heartbeat_file(self, agent_id: str, content: str \| None=None, enabled: bool \| None=None, interval: int \| None=None)` | Updates or persists an existing resource. |
 | `build_teammate_block(self, agent_id: str, teams: list[Team])` | Helper method for its service or type. |
@@ -941,8 +954,17 @@ Class, data model, service object, or exception type.
 | Method | Usage |
 |---|---|
 | `__init__(self, db: Database, events: EventService)` | Python object lifecycle or protocol method. |
-| `post(self, team_id: str, payload: ChatMessageCreate)` | Helper method for its service or type. |
-| `get(self, message_id: int)` | Reads one resource, status object, or derived view. |
+| `post(self, team_id: str, payload: ChatMessageCreate, conn: sqlite3.Connection \| None=None, *, emit_event: bool=True)` | Helper method for its service or type. |
+| `get(self, message_id: int, conn: sqlite3.Connection \| None=None)` | Reads one resource, status object, or derived view. |
+| `find_by_client_message_id(self, team_id: str, client_message_id: str, conn: sqlite3.Connection \| None=None)` | Helper method for its service or type. |
+| `get_dispatch(self, chat_message_id: int, conn: sqlite3.Connection \| None=None)` | Reads one resource, status object, or derived view. |
+| `_annotate_dispatch(self, message: ChatMessage, conn: sqlite3.Connection \| None=None)` | Helper method for its service or type. |
+| `record_dispatch(self, *, chat_message_id: int, team_id: str, client_message_id: str \| None, queued_count: int, message_ids: list[int], conn: sqlite3.Connection \| None=None)` | Helper method for its service or type. |
+| `broadcast_chatroom(self, queue: 'QueueService', team: Team, from_agent: str, content: str, agents: list[Agent], parent: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `dispatch_team_message(self, queue: 'QueueService', team: Team, message: str, *, sender: str='user', chat_message_id: int \| None=None, conn: sqlite3.Connection \| None=None, emit_event: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `post_chatroom_run_outputs(self, team: Team, runs: list)` | Helper method for its service or type. |
+| `is_chatroom_origin(message: QueueMessage)` | Helper method for its service or type. |
+| `team_child_metadata(parent: QueueMessage \| None, *, team: Team, from_agent: str, kind: str, to_agent: str)` | Helper method for its service or type. |
 | `list(self, team_id: str, limit: int=100, since: int=0, sender: str \| None=None, query: str \| None=None)` | Lists resources or query results. |
 | `archives(self)` | Helper method for its service or type. |
 | `prune(self, older_than_ms: int)` | Queue, response, or message flow operation. |
@@ -999,22 +1021,6 @@ Class, data model, service object, or exception type.
 
 Domain service layer for agents, teams, queues, projects, tasks, schedules, and related logic.
 
-| Function | Usage |
-|---|---|
-| `merge_dicts(left: dict[str, Any], right: dict[str, Any])` | Module-level helper. Review callers and tests before changing behavior. |
-
-#### `TeamActions`
-
-Class, data model, service object, or exception type.
-
-| Method | Usage |
-|---|---|
-| `__init__(self, mentions: list[tuple[str, str]], chatrooms: list[tuple[str, str]])` | Python object lifecycle or protocol method. |
-
-#### `WorkflowState(TypedDict)`
-
-Class, data model, service object, or exception type.
-
 #### `Orchestrator`
 
 Class, data model, service object, or exception type.
@@ -1030,27 +1036,11 @@ Class, data model, service object, or exception type.
 | `async _dispatch(self, message: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _run_team(self, message: QueueMessage, team: Team)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow)` | Runs a provider, orchestration flow, event handler, or external message handler. |
-| `_workflow_node_input(team: Team, workflow_id: str, original_request: str, node, predecessor_ids: list[str], outputs: dict[str, str])` | Helper method for its service or type. |
-| `_langchain_runnable_for_agent(self, agent: Agent)` | Helper method for its service or type. |
-| `_build_langgraph_workflow(self, *, team: Team, workflow_id: str, message: QueueMessage, agents: list[Agent], node_by_id: dict[str, Any], agent_by_id: dict[str, Agent], predecessors: dict[str, list[str]], outgoing: dict[str, list[str]], edge_pairs: list[tuple[str, str]], conditional_edges: list[Any], entrypoint: str)` | Helper method for its service or type. |
-| `_compile_workflow_routing_function(node)` | Helper method for its service or type. |
-| `_route_from_output(output: str, conditions: list[str])` | Helper method for its service or type. |
+| `_summarize_workflow_output(text: str, max_length: int=240)` | Helper method for its service or type. |
 | `async _run_iterative_rounds(self, team: Team, message: QueueMessage, agents: list[Agent], seed_runs: list[AgentRun], max_rounds: int)` | Runs a provider, orchestration flow, event handler, or external message handler. |
-| `_agent_lookup(agents: list[Agent])` | Helper method for its service or type. |
-| `_mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent])` | Helper method for its service or type. |
-| `_member_chain_input(self, team: Team, original_request: str, leader_run: AgentRun, previous_member_runs: list[AgentRun], member_id: str)` | Helper method for its service or type. |
-| `_leader_summary_input(self, team: Team, original_request: str, leader_run: AgentRun, member_runs: list[AgentRun])` | Helper method for its service or type. |
-| `_format_runs(runs: list[AgentRun])` | Converts, parses, or formats internal data. |
 | `async _handle_team_tags(self, team: Team, run: AgentRun, message: QueueMessage, agents: list[Agent], enqueue_mentions: bool=True, process_chatrooms: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _handle_direct_agent_team_tags(self, agent: Agent, run: AgentRun, message: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
-| `_broadcast_chatroom(self, team: Team, from_agent: str, content: str, agents: list[Agent], parent: QueueMessage)` | Runs a provider, orchestration flow, event handler, or external message handler. |
-| `_post_chatroom_run_outputs(self, team: Team, runs: list[AgentRun])` | Helper method for its service or type. |
-| `_is_chatroom_origin(message: QueueMessage)` | Helper method for its service or type. |
-| `_team_child_metadata(parent: QueueMessage \| None, *, team: Team, from_agent: str, kind: str, to_agent: str)` | Helper method for its service or type. |
-| `_order_agents_for_team(team: Team, agents: list[Agent])` | Helper method for its service or type. |
-| `_teams_for_agent(self, agent_id: str)` | Helper method for its service or type. |
-| `_resolve_team_context_for_agent(agent_id: str, teams: list[Team])` | Helper method for its service or type. |
-| `_resolve_team_for_tag(team_id: str, teams: list[Team], agent_id: str)` | Helper method for its service or type. |
+| `dispatch_team_message(self, team_id: str, message: str, *, sender: str='user', chat_message_id: int \| None=None, conn: Any \| None=None, emit_event: bool=True)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `async _run_agent(self, agent: Agent, input_text: str, context: list[str], *, message_id: int \| str \| None=None, session_id: str \| None=None, run_id: str \| None=None, teams: list[Team] \| None=None, project_workspace: Path \| None=None)` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `_agent_for_message(self, agent_id: str, message: QueueMessage)` | Helper method for its service or type. |
 | `_parse_target(target: str)` | Converts, parses, or formats internal data. |
@@ -1145,7 +1135,7 @@ Class, data model, service object, or exception type.
 | Method | Usage |
 |---|---|
 | `__init__(self, db: Database, events: EventService, settings: Settings, responses: ResponseService \| None=None, plugins: PluginService \| None=None)` | Python object lifecycle or protocol method. |
-| `enqueue(self, payload: MessageCreate)` | Queue, response, or message flow operation. |
+| `enqueue(self, payload: MessageCreate, conn: sqlite3.Connection \| None=None, *, emit_event: bool=True)` | Queue, response, or message flow operation. |
 | `get(self, message_id: int)` | Reads one resource, status object, or derived view. |
 | `list(self, limit: int=100, status: MessageStatus \| None=None)` | Lists resources or query results. |
 | `find_by_client_message_id(self, client_message_id: str, limit: int=1000)` | Helper method for its service or type. |
@@ -1331,6 +1321,15 @@ Class, data model, service object, or exception type.
 | `add_member(self, team_id: str, agent_id: str)` | Creates a resource, installs content, or adds a relationship. |
 | `remove_member(self, team_id: str, agent_id: str)` | Deletes a resource or clears state. |
 | `set_leader(self, team_id: str, agent_id: str)` | Updates or persists an existing resource. |
+| `for_agent(self, agent_id: str)` | Helper method for its service or type. |
+| `order_agents_for_team(team: Team, agents: list[Agent])` | Helper method for its service or type. |
+| `resolve_team_context_for_agent(agent_id: str, teams: list[Team])` | Helper method for its service or type. |
+| `resolve_team_for_tag(team_id: str, teams: list[Team], agent_id: str)` | Helper method for its service or type. |
+| `agent_lookup(agents: list[Agent])` | Helper method for its service or type. |
+| `mentions_from_runs(self, runs: list[AgentRun], agents: list[Agent])` | Helper method for its service or type. |
+| `member_chain_input(self, team: Team, original_request: str, leader_run: AgentRun, previous_member_runs: list[AgentRun], member_id: str)` | Helper method for its service or type. |
+| `leader_summary_input(self, team: Team, original_request: str, leader_run: AgentRun, member_runs: list[AgentRun])` | Helper method for its service or type. |
+| `format_runs(runs: list[AgentRun])` | Converts, parses, or formats internal data. |
 | `_sync_team_settings(self, team: Team)` | Helper method for its service or type. |
 | `_remove_team_settings(self, team_id: str)` | Deletes a resource or clears state. |
 | `_to_team(row)` | Converts, parses, or formats internal data. |
@@ -1368,6 +1367,14 @@ Class, data model, service object, or exception type.
 
 Domain service layer for agents, teams, queues, projects, tasks, schedules, and related logic.
 
+| Function | Usage |
+|---|---|
+| `merge_dicts(left: dict[str, Any], right: dict[str, Any])` | Module-level helper. Review callers and tests before changing behavior. |
+
+#### `WorkflowState(TypedDict)`
+
+Class, data model, service object, or exception type.
+
 #### `WorkflowService`
 
 Class, data model, service object, or exception type.
@@ -1389,6 +1396,14 @@ Class, data model, service object, or exception type.
 | `graph_io(definition: WorkflowDefinition)` | Helper method for its service or type. |
 | `terminal_nodes(definition: WorkflowDefinition)` | Helper method for its service or type. |
 | `_topological_order(definition: WorkflowDefinition)` | Helper method for its service or type. |
+| `async run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow: TeamWorkflow, *, run_agent: Callable[..., Awaitable[AgentRun]], queue: QueueService, chat: ChatService, events: EventService, project_workspace_for_message: Callable[[QueueMessage], Path \| None])` | Runs a provider, orchestration flow, event handler, or external message handler. |
+| `workflow_node_input(team: Team, workflow_id: str, original_request: str, node, node_name: str, predecessor_ids: list[str], outputs: dict[str, str])` | Helper method for its service or type. |
+| `format_workflow_predecessors(cls, predecessor_ids: list[str], outputs: dict[str, str])` | Converts, parses, or formats internal data. |
+| `summarize_workflow_output(text: str, max_length: int=240)` | Helper method for its service or type. |
+| `_langchain_runnable_for_agent(agent: Agent, run_agent: Callable[..., Awaitable[AgentRun]])` | Helper method for its service or type. |
+| `_build_langgraph_workflow(self, *, team: Team, workflow_id: str, message: QueueMessage, agents: list[Agent], node_by_id: dict[str, Any], agent_by_id: dict[str, Agent], predecessors: dict[str, list[str]], outgoing: dict[str, list[str]], edge_pairs: list[tuple[str, str]], conditional_edges: list[Any], entrypoint: str, run_agent: Callable[..., Awaitable[AgentRun]], queue: QueueService, events: EventService, project_workspace_for_message: Callable[[QueueMessage], Path \| None])` | Helper method for its service or type. |
+| `compile_workflow_routing_function(node)` | Helper method for its service or type. |
+| `route_from_output(output: str, conditions: list[str])` | Helper method for its service or type. |
 | `_disable_other_workflows(self, team_id: str, workflow_id: str)` | Helper method for its service or type. |
 | `_to_workflow(row)` | Converts, parses, or formats internal data. |
 

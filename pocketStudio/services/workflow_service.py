@@ -1,13 +1,30 @@
 from __future__ import annotations
 
 import json
+import operator
 from collections import defaultdict, deque
-from typing import Any
+from pathlib import Path
+from typing import Annotated, Any, Awaitable, Callable, TypedDict
 
 from pocketStudio.core.database import Database
 from pocketStudio.core.ids import prefixed_id
-from pocketStudio.models import TeamWorkflow, TeamWorkflowCreate, TeamWorkflowUpdate, WorkflowDefinition
+from pocketStudio.models import Agent, AgentRun, ChatMessageCreate, OrchestrationResult, QueueMessage, Team, TeamWorkflow, TeamWorkflowCreate, TeamWorkflowUpdate, WorkflowDefinition
+from pocketStudio.services.chat_service import ChatService
+from pocketStudio.services.event_service import EventService
+from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
+
+_WORKFLOW_FULL_CONTEXT_LIMIT = 5
+def merge_dicts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    return {**left, **right}
+
+
+class WorkflowState(TypedDict):
+    original_request: str
+    outputs: Annotated[dict[str, str], merge_dicts]
+    runs_by_node: Annotated[dict[str, AgentRun], merge_dicts]
+    runs: Annotated[list[AgentRun], operator.add]
+    run_order: Annotated[list[str], operator.add]
 
 
 class WorkflowService:
@@ -218,6 +235,338 @@ class WorkflowService:
             unreachable = sorted(node_ids - set(visited))
             raise ValueError(f"Workflow graph must be reachable from entrypoint: {', '.join(unreachable)}")
         return visited
+
+    async def run_workflow(
+        self,
+        message: QueueMessage,
+        team: Team,
+        agents: list[Agent],
+        workflow: TeamWorkflow,
+        *,
+        run_agent: Callable[..., Awaitable[AgentRun]],
+        queue: QueueService,
+        chat: ChatService,
+        events: EventService,
+        project_workspace_for_message: Callable[[QueueMessage], Path | None],
+    ) -> OrchestrationResult:
+        definition = workflow.definition
+        order = self._topological_order(definition)
+        node_by_id = {node.id: node for node in definition.nodes}
+        agent_by_id = {agent.id: agent for agent in agents}
+        outgoing, predecessors = self.graph_io(definition)
+
+        compiled_graph = self._build_langgraph_workflow(
+            team=team,
+            workflow_id=workflow.id,
+            message=message,
+            agents=agents,
+            node_by_id=node_by_id,
+            agent_by_id=agent_by_id,
+            predecessors=predecessors,
+            outgoing=outgoing,
+            edge_pairs=[(edge.source, edge.target) for edge in definition.edges],
+            conditional_edges=definition.conditional_edges,
+            entrypoint=definition.entrypoint,
+            run_agent=run_agent,
+            queue=queue,
+            events=events,
+            project_workspace_for_message=project_workspace_for_message,
+        )
+        state = await compiled_graph.ainvoke(
+            {"original_request": message.content, "outputs": {}, "runs_by_node": {}, "runs": [], "run_order": []},
+            {"recursion_limit": 50},
+        )
+        runs = state.get("runs", [])
+        outputs = state["outputs"]
+
+        output_node = definition.output_node or order[-1]
+        output = outputs.get(output_node) or (runs[-1].output if runs else "")
+        if chat.is_chatroom_origin(message):
+            chat.post_chatroom_run_outputs(team, runs)
+        else:
+            chat.post(team.id, ChatMessageCreate(sender="TeamManager", message=output))
+        events.emit(
+            "team.workflow.completed",
+            {"team_id": team.id, "workflow_id": workflow.id, "nodes": len(runs), "output_node": output_node},
+        )
+        return OrchestrationResult(message_id=message.id, target=message.target, runs=runs, output=output)
+
+    @staticmethod
+    def workflow_node_input(
+        team: Team,
+        workflow_id: str,
+        original_request: str,
+        node,
+        node_name: str,
+        predecessor_ids: list[str],
+        outputs: dict[str, str],
+    ) -> str:
+        predecessor_text = WorkflowService.format_workflow_predecessors(predecessor_ids, outputs)
+        if node.input_template:
+            try:
+                return node.input_template.format(
+                    team_id=team.id,
+                    workflow_id=workflow_id,
+                    node_name=node_name,
+                    agent_id=node.agent_id,
+                    message=original_request,
+                    predecessor_outputs=predecessor_text,
+                )
+            except KeyError as exc:
+                raise ValueError(f"Workflow node '{node.id}' inputTemplate references unknown field: {exc}") from exc
+        chunks = [f"Team #{team.id} workflow '{workflow_id}' request:\n{original_request}"]
+        if node_name:
+            chunks.append(f"Workflow node:\n{node_name}")
+        if node.prompt:
+            chunks.append(f"Node instruction:\n{node.prompt}")
+        if predecessor_text:
+            chunks.append(f"Upstream results:\n{predecessor_text}")
+        return "\n\n------\n\n".join(chunks)
+
+    @classmethod
+    def format_workflow_predecessors(cls, predecessor_ids: list[str], outputs: dict[str, str]) -> str:
+        if not predecessor_ids:
+            return ""
+
+        recent_ids = predecessor_ids[-_WORKFLOW_FULL_CONTEXT_LIMIT:]
+        older_ids = predecessor_ids[:-_WORKFLOW_FULL_CONTEXT_LIMIT]
+
+        chunks: list[str] = []
+        for predecessor_id in recent_ids:
+            if predecessor_id not in outputs:
+                continue
+            chunks.append(f"## {predecessor_id}\n{outputs[predecessor_id]}")
+
+        if older_ids:
+            summarized = []
+            for predecessor_id in older_ids:
+                if predecessor_id not in outputs:
+                    continue
+                summarized.append(f"- {predecessor_id}: {cls.summarize_workflow_output(outputs[predecessor_id])}")
+            if summarized:
+                chunks.append("## Earlier upstream summary\n" + "\n".join(summarized))
+
+        return "\n\n".join(chunks)
+
+    @staticmethod
+    def summarize_workflow_output(text: str, max_length: int = 240) -> str:
+        cleaned = " ".join(line.strip() for line in text.splitlines() if line.strip())
+        if not cleaned:
+            return "(empty)"
+        if len(cleaned) <= max_length:
+            return cleaned
+        return f"{cleaned[: max_length - 1].rstrip()}..."
+
+    @staticmethod
+    def _langchain_runnable_for_agent(agent: Agent, run_agent: Callable[..., Awaitable[AgentRun]]):
+        try:
+            from langchain_core.runnables import RunnableLambda
+        except ImportError as exc:
+            raise RuntimeError("LangChain is required to execute team workflows") from exc
+
+        async def run_agent_node(payload: dict) -> AgentRun:
+            return await run_agent(
+                agent,
+                payload["input"],
+                payload.get("context", []),
+                message_id=payload.get("message_id"),
+                session_id=payload.get("session_id"),
+                run_id=payload.get("run_id"),
+                teams=payload.get("teams"),
+                project_workspace=payload.get("project_workspace"),
+            )
+
+        return RunnableLambda(run_agent_node)
+
+    def _build_langgraph_workflow(
+        self,
+        *,
+        team: Team,
+        workflow_id: str,
+        message: QueueMessage,
+        agents: list[Agent],
+        node_by_id: dict[str, Any],
+        agent_by_id: dict[str, Agent],
+        predecessors: dict[str, list[str]],
+        outgoing: dict[str, list[str]],
+        edge_pairs: list[tuple[str, str]],
+        conditional_edges: list[Any],
+        entrypoint: str,
+        run_agent: Callable[..., Awaitable[AgentRun]],
+        queue: QueueService,
+        events: EventService,
+        project_workspace_for_message: Callable[[QueueMessage], Path | None],
+    ):
+        try:
+            from langgraph.graph import END, StateGraph
+        except ImportError as exc:
+            raise RuntimeError("LangGraph is required to execute team workflows") from exc
+
+        graph = StateGraph(WorkflowState)
+        for node_id, node in node_by_id.items():
+            agent = agent_by_id.get(node.agent_id) if node.type == "agent" else None
+            if node.type == "agent" and agent is None:
+                raise ValueError(f"Workflow node '{node.id}' references unavailable agent '{node.agent_id}'")
+            runnable = self._langchain_runnable_for_agent(agent, run_agent) if agent is not None else None
+
+            async def run_node(state: WorkflowState, *, node=node, agent=agent, runnable=runnable) -> dict:
+                if agent is not None:
+                    node_name = agent.name
+                elif node.type == "start":
+                    node_name = "Start"
+                elif node.type == "end":
+                    node_name = "End"
+                elif node.type == "tool":
+                    node_name = node.prompt or "Tool"
+                else:
+                    node_name = node.prompt or node.id
+                input_text = self.workflow_node_input(
+                    team,
+                    workflow_id,
+                    state["original_request"],
+                    node,
+                    node_name,
+                    predecessors[node.id],
+                    state["outputs"],
+                )
+                context = [state["outputs"][source] for source in predecessors[node.id] if source in state["outputs"]]
+                if node.type == "agent" and agent is not None and runnable is not None:
+                    queue.insert_agent_message(agent.id, "user", input_text, str(message.id), sender=f"workflow:{workflow_id}")
+                    run = await runnable.ainvoke(
+                        {
+                            "input": input_text,
+                            "context": context,
+                            "teams": [team],
+                            "project_workspace": project_workspace_for_message(message),
+                        }
+                    )
+                    queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
+                elif node.type == "start":
+                    run = AgentRun(agent_id=node.id, input=input_text, output=state["original_request"])
+                elif node.type == "end":
+                    output = context[-1] if context else state["original_request"]
+                    run = AgentRun(agent_id=node.id, input=input_text, output=output)
+                else:
+                    output = node.prompt or (context[-1] if context else state["original_request"])
+                    run = AgentRun(agent_id=node.id, input=input_text, output=output)
+                return {
+                    "outputs": {node.id: run.output},
+                    "runs_by_node": {node.id: run},
+                    "runs": [run],
+                    "run_order": [node.id],
+                }
+
+            graph.add_node(node_id, run_node)
+
+        graph.set_entry_point(entrypoint)
+        for source, target in edge_pairs:
+            graph.add_edge(source, target)
+        for conditional_edge in conditional_edges:
+            route_map = {route.condition: route.target for route in conditional_edge.routes}
+            default_route = "__default__"
+            route_map[default_route] = conditional_edge.default_target or END
+            source_node = node_by_id[conditional_edge.source]
+            custom_route = self.compile_workflow_routing_function(source_node) if source_node.routing_function else None
+
+            def route_from_output(
+                state: WorkflowState,
+                *,
+                conditional_edge=conditional_edge,
+                route_map=route_map,
+                custom_route=custom_route,
+            ) -> str:
+                if custom_route is not None:
+                    route = custom_route(state)
+                else:
+                    source_output = state["outputs"].get(conditional_edge.source, "")
+                    route = self.route_from_output(source_output, [route.condition for route in conditional_edge.routes])
+                selected_route = route if route in route_map else default_route
+                target = route_map[selected_route]
+                events.emit(
+                    "team.workflow.route",
+                    {
+                        "team_id": team.id,
+                        "workflow_id": workflow_id,
+                        "source": conditional_edge.source,
+                        "route": selected_route,
+                        "target": target if target != END else "END",
+                    },
+                )
+                return selected_route
+
+            graph.add_conditional_edges(conditional_edge.source, route_from_output, route_map)
+
+        terminal_nodes = [node_id for node_id in node_by_id if not outgoing.get(node_id)]
+        for node_id in terminal_nodes:
+            graph.add_edge(node_id, END)
+        compiled = graph.compile()
+        events.emit("team.workflow.runtime", {"runtime": "langgraph"})
+        return compiled
+
+    @staticmethod
+    def compile_workflow_routing_function(node) -> Any:
+        routing_function = node.routing_function
+        if routing_function is None:
+            raise ValueError(f"Workflow node '{node.id}' does not define routingFunction")
+        if routing_function.language != "python":
+            raise ValueError(
+                f"Workflow node '{node.id}' routingFunction language '{routing_function.language}' is not supported"
+            )
+        namespace: dict[str, Any] = {}
+        safe_builtins = {
+            "all": all,
+            "any": any,
+            "bool": bool,
+            "dict": dict,
+            "float": float,
+            "int": int,
+            "len": len,
+            "list": list,
+            "max": max,
+            "min": min,
+            "set": set,
+            "sorted": sorted,
+            "str": str,
+            "sum": sum,
+            "tuple": tuple,
+        }
+        globals_dict = {"__builtins__": safe_builtins, "json": json}
+        try:
+            exec(routing_function.code, globals_dict, namespace)
+        except Exception as exc:
+            raise ValueError(f"Workflow node '{node.id}' routingFunction failed to compile: {exc}") from exc
+        route_callable = namespace.get(routing_function.entrypoint) or globals_dict.get(routing_function.entrypoint)
+        if not callable(route_callable):
+            raise ValueError(
+                f"Workflow node '{node.id}' routingFunction entrypoint '{routing_function.entrypoint}' is not callable"
+            )
+
+        def route(state: WorkflowState) -> str:
+            try:
+                selected_route = route_callable(state)
+            except Exception as exc:
+                raise ValueError(f"Workflow node '{node.id}' routingFunction failed: {exc}") from exc
+            if not isinstance(selected_route, str):
+                raise ValueError(f"Workflow node '{node.id}' routingFunction must return a string route")
+            return selected_route
+
+        return route
+
+    @staticmethod
+    def route_from_output(output: str, conditions: list[str]) -> str:
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, dict):
+                route = parsed.get("route")
+                if isinstance(route, str):
+                    return route
+        except json.JSONDecodeError:
+            pass
+        lowered_output = output.lower()
+        for condition in conditions:
+            if condition.lower() in lowered_output:
+                return condition
+        return "__default__"
 
     def _disable_other_workflows(self, team_id: str, workflow_id: str) -> None:
         self.db.execute(
