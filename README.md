@@ -9,6 +9,12 @@
 
 ![PocketStudio working dashboard](docs/assets/Working.png)
 
+## Community
+
+This repository is a Python/FastAPI implementation inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi). For upstream TinyAGI community links, see the [TinyAGI](https://github.com/TinyAGI/tinyagi) project.
+
+Contributions should keep service boundaries clear: API routes call services, orchestration remains a thin facade, and long-running provider work stays behind provider adapters.
+
 ## Features
 
 - ✅ **Multi-agent runtime**: create isolated agents with their own workspace, memory, prompts, skills, and conversation state.
@@ -89,11 +95,6 @@ Please provide the structural layout and the main page.tsx code with smooth tran
 
 ```
 
-## Community
-
-This repository is a Python/FastAPI implementation inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi). For upstream TinyAGI community links, see the [TinyAGI](https://github.com/TinyAGI/tinyagi) project.
-
-Contributions should keep service boundaries clear: API routes call services, orchestration remains a thin facade, and long-running provider work stays behind provider adapters.
 
 ## Quick Start
 
