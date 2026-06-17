@@ -61,6 +61,34 @@ All current product screenshots and workflow visuals are collected here for quic
   </tr>
 </table>
 
+### Example
+**This is a webpage generated with a single click using this platform.**
+![Example](docs/assets/template.png)
+
+https://atomchen0425.github.io/AI_Generate_Project/
+
+
+**Task description:**
+```
+The project root directory for this photography portfolio website is explicitly declared as:`D:\Coding\TestFolder\Photograph`
+
+Build a modern, minimalist responsive photography portfolio website.
+### Design System & Aesthetics:
+- Vibe: Premium, cinematic, clean, gallery-like, dark/light theme (default to dark theme to make photos pop).
+- Colors: Pure dark background (#0D0D0D), muted white text (#E5E5E5), and subtle accents.
+- Typography: Clean sans-serif for UI, elegant serif/display font for headers (e.g., Playfair Display or Inter).
+- Spacing: Generous whitespace, thin clean borders, masonry-grid/infinite-scroll layout for galleries.
+
+### Site Structure & Routes:
+1. / (Home/Gallery): A masonry grid layout displaying featured photography works. Images should have a subtle hover effect (e.g., slight scale-up, reveal photo title/metadata like focal length/aperture). Clicking a photo opens a beautiful full-screen immersive lightbox modal.
+2. /about: A clean, editorial-style "About Me" page split into two columns: one for a professional portrait, the other for an artist statement, tech/gear stack, and contact links.
+3. /collections (or Categories): Filterable tabs (e.g., Street, Portrait, Cinematic, Landscape) that smoothly re-arrange the image grid using animations (Framer Motion preferred).
+
+Please provide the structural layout and the main page.tsx code with smooth transition animations.
+
+
+```
+
 ## Community
 
 This repository is a Python/FastAPI implementation inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi). For upstream TinyAGI community links, see the [TinyAGI](https://github.com/TinyAGI/tinyagi) project.
@@ -397,33 +425,6 @@ pocketstudio send "@team:dev Work on PROJECT_ID tasks"
 ![Project view](docs/assets/project.png)
 ![Completed work view](docs/assets/Done.png)
 
-#### Example
-**This is a webpage generated with a single click using this platform.**
-![Example](docs/assets/template.png)
-
-https://atomchen0425.github.io/AI_Generate_Project/
-
-
-**Task description:**
-```
-The project root directory for this photography portfolio website is explicitly declared as:`D:\Coding\TestFolder\Photograph`
-
-Build a modern, minimalist responsive photography portfolio website.
-### Design System & Aesthetics:
-- Vibe: Premium, cinematic, clean, gallery-like, dark/light theme (default to dark theme to make photos pop).
-- Colors: Pure dark background (#0D0D0D), muted white text (#E5E5E5), and subtle accents.
-- Typography: Clean sans-serif for UI, elegant serif/display font for headers (e.g., Playfair Display or Inter).
-- Spacing: Generous whitespace, thin clean borders, masonry-grid/infinite-scroll layout for galleries.
-
-### Site Structure & Routes:
-1. / (Home/Gallery): A masonry grid layout displaying featured photography works. Images should have a subtle hover effect (e.g., slight scale-up, reveal photo title/metadata like focal length/aperture). Clicking a photo opens a beautiful full-screen immersive lightbox modal.
-2. /about: A clean, editorial-style "About Me" page split into two columns: one for a professional portrait, the other for an artist statement, tech/gear stack, and contact links.
-3. /collections (or Categories): Filterable tabs (e.g., Street, Portrait, Cinematic, Landscape) that smoothly re-arrange the image grid using animations (Framer Motion preferred).
-
-Please provide the structural layout and the main page.tsx code with smooth transition animations.
-
-
-```
 
 
 ## 🗺️ Roadmap
