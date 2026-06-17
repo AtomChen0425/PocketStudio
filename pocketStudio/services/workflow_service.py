@@ -350,6 +350,9 @@ class WorkflowService:
 
     @staticmethod
     def summarize_workflow_output(text: str, max_length: int = 240) -> str:
+        '''
+        TODO: add LLM to handle summarize
+        '''
         cleaned = " ".join(line.strip() for line in text.splitlines() if line.strip())
         if not cleaned:
             return "(empty)"
