@@ -34,7 +34,7 @@ export function useOfficeData() {
     async () => {
       if (!agents) return {};
       const entries = await Promise.all(
-        Object.keys(agents).map(async (agentId) => [agentId, await getAgentMessages(agentId, 40)] as const),
+        Object.keys(agents).map(async (agentId) => [agentId, await getAgentMessages(agentId, 200)] as const),
       );
       return Object.fromEntries(entries);
     },

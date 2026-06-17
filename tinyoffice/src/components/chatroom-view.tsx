@@ -1,11 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { usePolling, timeAgo } from "@/lib/hooks";
-import {
-  getChatMessages, postChatMessage, getAgents,
-  type ChatMessage, type AgentConfig,
-} from "@/lib/api";
+import { getChatMessages, sendChatroomMessage, getAgents, type ChatMessage, type AgentConfig } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   ChatContainerRoot,
@@ -22,6 +19,12 @@ import { Markdown } from "@/components/ui/markdown";
 import { Hash, ArrowUp, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+type ChatroomStatus = "sending" | "failed" | "dispatched" | "stored";
+
+type ChatRoomItem = ChatMessage & {
+  local_status?: ChatroomStatus;
+};
+
 const AGENT_COLORS = [
   "bg-blue-500", "bg-emerald-500", "bg-purple-500", "bg-orange-500",
   "bg-pink-500", "bg-cyan-500", "bg-yellow-500", "bg-red-500",
@@ -35,6 +38,24 @@ function agentColor(agentId: string): string {
   return AGENT_COLORS[Math.abs(hash) % AGENT_COLORS.length];
 }
 
+function statusLabel(message: ChatRoomItem): string | null {
+  if (message.local_status === "sending") return "Sending";
+  if (message.local_status === "failed") return "Dispatch failed";
+  if (message.dispatch_status === "dispatched") {
+    const count = message.dispatch_queued_count ?? message.dispatch_message_ids?.length ?? 0;
+    return count > 0 ? `Dispatched to ${count}` : "Dispatched";
+  }
+  if (message.client_message_id) return "Stored";
+  return null;
+}
+
+function statusClass(message: ChatRoomItem): string {
+  if (message.local_status === "sending") return "text-amber-600 dark:text-amber-400";
+  if (message.local_status === "failed") return "text-destructive";
+  if (message.dispatch_status === "dispatched") return "text-emerald-600 dark:text-emerald-400";
+  return "text-muted-foreground";
+}
+
 export function ChatRoomView({
   teamId,
   teamName,
@@ -43,7 +64,8 @@ export function ChatRoomView({
   teamName: string;
 }) {
   const { data: agents } = usePolling<Record<string, AgentConfig>>(getAgents, 0);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [remoteMessages, setRemoteMessages] = useState<ChatRoomItem[]>([]);
+  const [draftMessages, setDraftMessages] = useState<ChatRoomItem[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -56,18 +78,70 @@ export function ChatRoomView({
 
   useEffect(() => {
     if (polledMessages) {
-      setMessages(polledMessages);
+      setRemoteMessages(polledMessages);
     }
   }, [polledMessages]);
+
+  const messages = useMemo(() => {
+    const merged: ChatRoomItem[] = [...remoteMessages];
+    const seen = new Set(
+      remoteMessages.map((msg) => msg.client_message_id ? `client:${msg.client_message_id}` : `id:${msg.id}`),
+    );
+    for (const draft of draftMessages) {
+      const key = draft.client_message_id ? `client:${draft.client_message_id}` : `id:${draft.id}`;
+      if (seen.has(key)) continue;
+      merged.push(draft);
+    }
+    merged.sort((a, b) => {
+      if (a.created_at !== b.created_at) return a.created_at - b.created_at;
+      return a.id - b.id;
+    });
+    return merged;
+  }, [remoteMessages, draftMessages]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || sending) return;
     setSending(true);
+    const clientMessageId = crypto.randomUUID();
+    const createdAt = Date.now();
+    const content = input.trim();
+    setDraftMessages((current) => [
+      ...current,
+      {
+        id: -createdAt,
+        team_id: teamId,
+        from_agent: "user",
+        message: content,
+        client_message_id: clientMessageId,
+        created_at: createdAt,
+        local_status: "sending",
+      },
+    ]);
     try {
-      await postChatMessage(teamId, input.trim());
+      const response = await sendChatroomMessage(teamId, {
+        message: content,
+        sender: "user",
+        clientMessageId,
+      });
+      const serverMessage = response.chatMessage;
+      setDraftMessages((current) =>
+        current.map((msg) => {
+          if (msg.client_message_id !== clientMessageId) return msg;
+          return {
+            ...serverMessage,
+            local_status: response.dispatch ? "dispatched" : "stored",
+          };
+        }),
+      );
       setInput("");
     } catch {
-      // Ignore
+      setDraftMessages((current) =>
+        current.map((msg) =>
+          msg.client_message_id === clientMessageId
+            ? { ...msg, local_status: "failed" }
+            : msg,
+        ),
+      );
     } finally {
       setSending(false);
     }
@@ -96,9 +170,10 @@ export function ChatRoomView({
               const displayName = agent?.name || msg.from_agent;
               const initials = displayName.slice(0, 2).toUpperCase();
               const isUser = msg.from_agent === "user";
+              const label = statusLabel(msg);
 
               return (
-                <div key={msg.id} className="flex items-start gap-3">
+                <div key={msg.client_message_id || msg.id} className="flex items-start gap-3">
                   <div
                     className={cn(
                       "flex h-8 w-8 items-center justify-center text-[10px] font-bold uppercase shrink-0",
@@ -115,6 +190,11 @@ export function ChatRoomView({
                       <span className="text-[10px] text-muted-foreground">
                         {timeAgo(msg.created_at)}
                       </span>
+                      {label ? (
+                        <span className={cn("text-[10px] font-medium", statusClass(msg))}>
+                          {label}
+                        </span>
+                      ) : null}
                     </div>
                     <Markdown className="prose prose-sm dark:prose-invert mt-0.5 max-w-none break-words text-foreground/90">
                       {msg.message}

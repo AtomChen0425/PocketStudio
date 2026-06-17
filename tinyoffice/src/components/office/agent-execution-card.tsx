@@ -3,7 +3,7 @@
 import { ChevronDown, ChevronRight, CircleDot } from "lucide-react";
 import type { OfficeEvent } from "@/lib/api";
 import { timeAgo } from "@/lib/hooks";
-import { summarizeExecutionEvent } from "./types";
+import { describeRunProgress, summarizeExecutionEvent } from "./types";
 
 type AgentExecutionCardProps = {
   agentId: string;
@@ -12,6 +12,7 @@ type AgentExecutionCardProps = {
   messageId?: string;
   runId?: string;
   sessionId?: string;
+  animationTick?: number;
 };
 
 function matchesRun(
@@ -25,19 +26,23 @@ function matchesRun(
   return true;
 }
 
+function isDisplayableRunEvent(event: OfficeEvent): boolean {
+  return !event.type.startsWith("heartbeat:");
+}
+
 function getRunStatus(events: OfficeEvent[]): "running" | "completed" | "failed" {
   if (events.some((event) => event.type === "message:failed")) return "failed";
   if (events.some((event) => event.type === "agent:response" || event.type === "message:done")) return "completed";
   return "running";
 }
 
-function getRunSummary(events: OfficeEvent[]): string {
+function getRunSummary(events: OfficeEvent[], animationTick?: number): string {
   const reverse = [...events].sort((a, b) => b.timestamp - a.timestamp);
   for (const event of reverse) {
     const summary = summarizeExecutionEvent(event);
     if (summary.trim()) return summary;
   }
-  return "Working...";
+  return describeRunProgress(events, animationTick);
 }
 
 function getRunTitle(status: "running" | "completed" | "failed", count: number): string {
@@ -53,9 +58,10 @@ export function AgentExecutionCard({
   messageId,
   runId,
   sessionId,
+  animationTick,
 }: AgentExecutionCardProps) {
-  const relevantEvents = events.filter((event) =>
-    matchesRun(event, { agentId, messageId, runId, sessionId }),
+  const relevantEvents = events.filter(
+    (event) => matchesRun(event, { agentId, messageId, runId, sessionId }) && isDisplayableRunEvent(event),
   );
 
   if (relevantEvents.length === 0) return null;
@@ -63,7 +69,7 @@ export function AgentExecutionCard({
   const sortedEvents = [...relevantEvents].sort((left, right) => left.timestamp - right.timestamp);
   const status = getRunStatus(sortedEvents);
   // if (status !== "running") return null;
-  const summary = getRunSummary(sortedEvents);
+  const summary = getRunSummary(sortedEvents, animationTick);
   const startedAt = sortedEvents[0]?.timestamp ?? Date.now();
   const endedAt = sortedEvents[sortedEvents.length - 1]?.timestamp ?? startedAt;
 

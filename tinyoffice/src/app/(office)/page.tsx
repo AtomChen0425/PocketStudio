@@ -96,6 +96,7 @@ export default function OfficePage() {
             agentHistories={data.agentHistories}
             bubbles={sse.bubbles}
             runtimeEvents={runtimeEvents}
+            animationTick={sse.clock.frame}
             selectedAgentId={selectedAgentId}
           />
 

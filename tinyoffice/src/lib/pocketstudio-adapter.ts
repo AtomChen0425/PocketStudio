@@ -69,6 +69,10 @@ export type BackendChatMessage = {
   from_agent?: string;
   sender?: string;
   message: string;
+  client_message_id?: string | null;
+  dispatch_status?: string | null;
+  dispatch_queued_count?: number | null;
+  dispatch_message_ids?: number[];
   created_at: string;
 };
 
@@ -142,6 +146,10 @@ export function normalizeChatMessage(message: BackendChatMessage): ChatMessage {
     team_id: message.team_id,
     from_agent: message.from_agent || message.sender || "unknown",
     message: message.message,
+    client_message_id: message.client_message_id || null,
+    dispatch_status: message.dispatch_status || null,
+    dispatch_queued_count: message.dispatch_queued_count || null,
+    dispatch_message_ids: message.dispatch_message_ids || [],
     created_at: toTimestamp(message.created_at),
   };
 }

@@ -419,7 +419,7 @@ function ChatTabContent({
 
     const merged = [...historyEntries, ...liveEntries];
     const seen = new Set<string>();
-    return merged
+      return merged
       .sort((a, b) => {
         if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
         if (a.role !== b.role) return a.role === "user" ? -1 : 1;
@@ -432,7 +432,7 @@ function ChatTabContent({
         seen.add(key);
         return true;
       })
-      .slice(-60);
+      .slice(-200);
   }, [agentHistories, agents, bubbles, agentId, isBubbleRelevantToAgent]);
 
   useEffect(() => {

@@ -76,7 +76,7 @@ export default function ControlPlanePage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Control Plane</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Monitor and manage your TinyAGI system
+          Monitor and manage your PocketStudio system
         </p>
       </div>
 
@@ -139,7 +139,7 @@ function DisconnectedSplash({ onReconnect }: { onReconnect: () => void }) {
               <WifiOff className="h-6 w-6 text-muted-foreground" />
             </div>
           </div>
-          <h2 className="text-lg font-semibold">Cannot connect to TinyAGI</h2>
+          <h2 className="text-lg font-semibold">Cannot connect to PocketStudio</h2>
           <p className="text-sm text-muted-foreground">
             Make sure the daemon is running, or update the server address below.
           </p>
@@ -175,19 +175,6 @@ function DisconnectedSplash({ onReconnect }: { onReconnect: () => void }) {
 
         <div className="text-left bg-muted/50 border rounded p-4 space-y-2">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Get started</p>
-          <div className="text-sm space-y-1.5">
-            <p>1. Follow the installation guide at{" "}
-              <a
-                href="https://github.com/tinyagi/tinyagi"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline underline-offset-2"
-              >
-                github.com/tinyagi/tinyagi
-              </a>
-            </p>
-            <p>2. Run <code className="px-1.5 py-0.5 bg-background border rounded text-xs font-mono">tinyagi</code> to install and start</p>
-          </div>
         </div>
       </div>
     </div>

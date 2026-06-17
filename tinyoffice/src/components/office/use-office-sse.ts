@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { subscribeToEvents, type EventData, type OfficeEvent } from "@/lib/api";
-import { AGENT_SESSION_RELEASE_MS, extractTargets, type AgentWorkSession, type LiveBubble } from "./types";
+import {
+  AGENT_SESSION_RELEASE_MS,
+  OFFICE_BUBBLE_RETENTION_MS,
+  extractTargets,
+  type AgentWorkSession,
+  type LiveBubble,
+} from "./types";
 
 export function useOfficeSse() {
   const [bubbles, setBubbles] = useState<LiveBubble[]>([]);
@@ -132,7 +138,7 @@ export function useOfficeSse() {
             openRootOrderRef.current = [...openRootOrderRef.current.filter((id) => id !== messageId), messageId];
           }
 
-          setBubbles((current) =>
+        setBubbles((current) =>
             [
               ...current,
               {
@@ -143,7 +149,7 @@ export function useOfficeSse() {
                 targetAgents: target ? extractTargets(target) : extractTargets(message),
                 messageId,
               },
-            ].slice(-80),
+            ].slice(-200),
           );
         }
 
@@ -204,7 +210,7 @@ export function useOfficeSse() {
                 runId: payload.runId ? String(payload.runId) : undefined,
                 sessionId: payload.sessionId ? String(payload.sessionId) : undefined,
               },
-            ].slice(-80),
+            ].slice(-200),
           );
         }
 
@@ -236,7 +242,7 @@ export function useOfficeSse() {
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      const cutoff = Date.now() - 180000;
+      const cutoff = Date.now() - OFFICE_BUBBLE_RETENTION_MS;
       setBubbles((current) => current.filter((bubble) => bubble.timestamp > cutoff));
     }, 2000);
     return () => window.clearInterval(interval);

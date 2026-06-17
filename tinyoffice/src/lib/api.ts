@@ -234,6 +234,7 @@ export interface AgentMessage {
 export function isInternalAgentInput(message: Pick<AgentMessage, "role" | "sender">): boolean {
   if (message.role !== "user") return false;
   return (
+    message.sender === "System" ||
     message.sender === "orchestrator" ||
     message.sender.startsWith("workflow:") ||
     message.sender.startsWith("team:") ||
@@ -622,6 +623,10 @@ export interface ChatMessage {
   team_id: string;
   from_agent: string;
   message: string;
+  client_message_id?: string | null;
+  dispatch_status?: string | null;
+  dispatch_queued_count?: number | null;
+  dispatch_message_ids?: number[];
   created_at: number;
 }
 
@@ -639,12 +644,33 @@ export async function getChatMessages(
 export async function postChatMessage(
   teamId: string,
   message: string
-): Promise<{ ok: boolean }> {
-  await apiFetch(`/api/chatroom/${encodeURIComponent(teamId)}`, {
+): Promise<{ ok: boolean; messageId: number }> {
+  const posted = await apiFetch<BackendChatMessage>(`/api/chatroom/${encodeURIComponent(teamId)}`, {
     method: "POST",
     body: JSON.stringify({ sender: "user", message }),
   });
-  return { ok: true };
+  return { ok: true, messageId: posted.id };
+}
+
+export async function sendChatroomMessage(
+  teamId: string,
+  payload: { message: string; sender?: string; clientMessageId?: string },
+): Promise<{ ok: boolean; chatMessage: ChatMessage; dispatch: { teamId: string; chatMessageId: number; queued: number; messageIds: number[] } | null }> {
+  const response = await apiFetch<{ ok: boolean; chatMessage: BackendChatMessage; dispatch: { teamId: string; chatMessageId: number; queued: number; messageIds: number[] } | null }>(`/api/chatroom/${encodeURIComponent(teamId)}/send`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return { ...response, chatMessage: normalizeChatMessage(response.chatMessage) };
+}
+
+export async function dispatchTeamMessage(
+  teamId: string,
+  payload: { message: string; sender?: string; chatMessageId?: number },
+): Promise<{ ok: boolean; teamId: string; queued: number; messageIds: number[] }> {
+  return apiFetch(`/api/teams/${encodeURIComponent(teamId)}/dispatch`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 // ── Projects ───────────────────────────────────────────────────────────

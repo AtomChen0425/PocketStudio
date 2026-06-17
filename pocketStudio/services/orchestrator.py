@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import operator
-from uuid import uuid4
-from typing import Annotated, Any, TypedDict
+from typing import Any
 from pathlib import Path
 
 from pocketStudio.models import (
@@ -17,7 +15,6 @@ from pocketStudio.models import (
     Team,
     TeamMode,
 )
-from pocketStudio.providers.base import ProviderRequest
 from pocketStudio.providers.registry import ProviderRegistry
 from pocketStudio.services.agent_service import AgentService
 from pocketStudio.services.chat_service import ChatService
@@ -30,26 +27,7 @@ from pocketStudio.utils.tag_parser import (
     extract_tags,
     strip_tags,
     split_candidate_ids,
-    get_directed_messages,
 )
-
-
-class TeamActions:
-    def __init__(self, mentions: list[tuple[str, str]], chatrooms: list[tuple[str, str]]) -> None:
-        self.mentions = mentions
-        self.chatrooms = chatrooms
-
-
-def merge_dicts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
-    return {**left, **right}
-
-
-class WorkflowState(TypedDict):
-    original_request: str
-    outputs: Annotated[dict[str, str], merge_dicts]
-    runs_by_node: Annotated[dict[str, AgentRun], merge_dicts]
-    runs: Annotated[list[AgentRun], operator.add]
-    run_order: Annotated[list[str], operator.add]
 
 
 class Orchestrator:
@@ -72,8 +50,6 @@ class Orchestrator:
         self.providers = providers
         self.projects = projects
         self.workflows = workflows
-        self._initialized_workspaces: set[str] = set()
-        self._reset_agents: set[str] = set()
     def enqueue(self, payload: MessageCreate) -> QueueMessage:
         return self.queue.enqueue(payload)
 
@@ -89,25 +65,12 @@ class Orchestrator:
         *,
         cleared: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        agent = self.agents.get(agent_id)
-        provider_reset = await self.providers.reset_agent(agent_id)
-        self._reset_agents.add(agent_id)
-        self.events.emit(
-            "agent.session.reset",
-            {
-                "agent_id": agent_id,
-                "provider": agent.provider,
-                "cleared": cleared,
-                "provider_reset": provider_reset,
-                "next_run_reset": True,
-            },
+        return await self.agents.reset_runtime(
+            agent_id,
+            providers=self.providers,
+            events=self.events,
+            cleared=cleared,
         )
-        return {
-            "agentId": agent_id,
-            "cleared": cleared,
-            "providerReset": provider_reset,
-            "nextRunReset": True,
-        }
 
     async def process_one(self, newest: bool = False) -> OrchestrationResult | None:
         message = self.queue.next_queued(newest=newest)
@@ -143,7 +106,7 @@ class Orchestrator:
                 message.content,
                 [],
                 message_id=message.id,
-                teams=self._teams_for_agent(agent.id),
+                teams=self.teams.for_agent(agent.id),
                 project_workspace=project_workspace,
             )
             self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
@@ -173,13 +136,15 @@ class Orchestrator:
 
         leader_run_for_summary: AgentRun | None = None
         leader_agent_for_summary: Agent | None = None
+        chat_sender = "TeamManager"
         if team.mode == TeamMode.chain:
             runs: list[AgentRun] = []
-            ordered_agents = self._order_agents_for_team(team, agents)
+            ordered_agents = self.teams.order_agents_for_team(team, agents)
             context: list[str] = []
-            chatroom_origin = self._is_chatroom_origin(message)
+            chatroom_origin = self.chat.is_chatroom_origin(message)
             project_workspace = self._project_workspace_for_message(message)
             leader = ordered_agents[0]
+            chat_sender = leader.name
             leader_agent_for_summary = leader
             member_agents = ordered_agents[1:]
             if not chatroom_origin:
@@ -205,7 +170,7 @@ class Orchestrator:
             await self._handle_team_tags(team, leader_run, message, agents, enqueue_mentions=team.max_rounds <= 1)
 
             for agent in member_agents:
-                member_input = self._member_chain_input(team, message.content, leader_run, runs[1:], agent.id)
+                member_input = self.teams.member_chain_input(team, message.content, leader_run, runs[1:], agent.id)
                 run = await self._run_agent(
                     agent,
                     member_input,
@@ -221,7 +186,8 @@ class Orchestrator:
 
             output = runs[-1].output
         else:
-            ordered_agents = self._order_agents_for_team(team, agents)
+            ordered_agents = self.teams.order_agents_for_team(team, agents)
+            chat_sender = ordered_agents[0].name if ordered_agents else "TeamManager"
             project_workspace = self._project_workspace_for_message(message)
             runs = await asyncio.gather(
                 *(
@@ -258,11 +224,11 @@ class Orchestrator:
             team.mode == TeamMode.chain
             and leader_agent_for_summary is not None
             and leader_run_for_summary is not None
-            and not self._is_chatroom_origin(message)
+            and not self.chat.is_chatroom_origin(message)
             and any(run.agent_id != leader_agent_for_summary.id for run in runs)
         ):
             member_results = [run for run in runs if run is not leader_run_for_summary]
-            summary_input = self._leader_summary_input(team, message.content, leader_run_for_summary, member_results)
+            summary_input = self.teams.leader_summary_input(team, message.content, leader_run_for_summary, member_results)
             self.queue.insert_agent_message(
                 leader_agent_for_summary.id,
                 "user",
@@ -288,275 +254,37 @@ class Orchestrator:
             )
             output = final_run.output
 
-        if self._is_chatroom_origin(message):
-            self._post_chatroom_run_outputs(team, runs)
+        if self.chat.is_chatroom_origin(message):
+            self.chat.post_chatroom_run_outputs(team, runs)
         else:
-            self.chat.post(team.id, ChatMessageCreate(sender="TeamManager", message=output))
+            self.chat.post(team.id, ChatMessageCreate(sender=chat_sender, message=output))
         return OrchestrationResult(message_id=message.id, target=message.target, runs=runs, output=output)
 
     async def _run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow) -> OrchestrationResult:
-        definition = workflow.definition
-        order = WorkflowService._topological_order(definition)
-        node_by_id = {node.id: node for node in definition.nodes}
-        agent_by_id = {agent.id: agent for agent in agents}
-        outgoing, predecessors = WorkflowService.graph_io(definition)
-
-        compiled_graph = self._build_langgraph_workflow(
-            team=team,
-            workflow_id=workflow.id,
-            message=message,
-            agents=agents,
-            node_by_id=node_by_id,
-            agent_by_id=agent_by_id,
-            predecessors=predecessors,
-            outgoing=outgoing,
-            edge_pairs=[(edge.source, edge.target) for edge in definition.edges],
-            conditional_edges=definition.conditional_edges,
-            entrypoint=definition.entrypoint,
+        if self.workflows is None:
+            raise ValueError(f"Team '{team.id}' is in workflow mode but workflow service is unavailable")
+        return await self.workflows.run_workflow(
+            message,
+            team,
+            agents,
+            workflow,
+            run_agent=self._run_agent,
+            queue=self.queue,
+            chat=self.chat,
+            events=self.events,
+            project_workspace_for_message=self._project_workspace_for_message,
         )
-        state = await compiled_graph.ainvoke(
-            {"original_request": message.content, "outputs": {}, "runs_by_node": {}, "runs": [], "run_order": []},
-            {"recursion_limit": 100},
-        )
-        runs = state.get("runs", [])
-        outputs = state["outputs"]
-
-        output_node = definition.output_node or order[-1]
-        output = outputs.get(output_node) or (runs[-1].output if runs else "")
-        if self._is_chatroom_origin(message):
-            self._post_chatroom_run_outputs(team, runs)
-        else:
-            self.chat.post(team.id, ChatMessageCreate(sender="TeamManager", message=output))
-        self.events.emit(
-            "team.workflow.completed",
-            {"team_id": team.id, "workflow_id": workflow.id, "nodes": len(runs), "output_node": output_node},
-        )
-        return OrchestrationResult(message_id=message.id, target=message.target, runs=runs, output=output)
 
     @staticmethod
-    def _workflow_node_input(
-        team: Team,
-        workflow_id: str,
-        original_request: str,
-        node,
-        predecessor_ids: list[str],
-        outputs: dict[str, str],
-    ) -> str:
-        predecessor_text = "\n\n".join(f"## {source}\n{outputs[source]}" for source in predecessor_ids if source in outputs)
-        if node.input_template:
-            try:
-                return node.input_template.format(
-                    team_id=team.id,
-                    workflow_id=workflow_id,
-                    node_id=node.id,
-                    agent_id=node.agent_id,
-                    message=original_request,
-                    predecessor_outputs=predecessor_text,
-                )
-            except KeyError as exc:
-                raise ValueError(f"Workflow node '{node.id}' inputTemplate references unknown field: {exc}") from exc
-        chunks = [f"Team #{team.id} workflow '{workflow_id}' request:\n{original_request}"]
-        if node.prompt:
-            chunks.append(f"Node instruction:\n{node.prompt}")
-        if predecessor_text:
-            chunks.append(f"Upstream results:\n{predecessor_text}")
-        return "\n\n------\n\n".join(chunks)
-
-    def _langchain_runnable_for_agent(self, agent: Agent):
-        try:
-            from langchain_core.runnables import RunnableLambda
-        except ImportError as exc:
-            raise RuntimeError("LangChain is required to execute team workflows") from exc
-
-        async def run_agent(payload: dict) -> AgentRun:
-            return await self._run_agent(
-                agent,
-                payload["input"],
-                payload.get("context", []),
-                message_id=payload.get("message_id"),
-                session_id=payload.get("session_id"),
-                run_id=payload.get("run_id"),
-                teams=payload.get("teams"),
-                project_workspace=payload.get("project_workspace"),
-            )
-
-        return RunnableLambda(run_agent)
-
-    def _build_langgraph_workflow(
-        self,
-        *,
-        team: Team,
-        workflow_id: str,
-        message: QueueMessage,
-        agents: list[Agent],
-        node_by_id: dict[str, Any],
-        agent_by_id: dict[str, Agent],
-        predecessors: dict[str, list[str]],
-        outgoing: dict[str, list[str]],
-        edge_pairs: list[tuple[str, str]],
-        conditional_edges: list[Any],
-        entrypoint: str,
-    ):
-        try:
-            from langgraph.graph import END, StateGraph
-        except ImportError as exc:
-            raise RuntimeError("LangGraph is required to execute team workflows") from exc
-
-        graph = StateGraph(WorkflowState)
-        for node_id, node in node_by_id.items():
-            agent = agent_by_id.get(node.agent_id) if node.type == "agent" else None
-            if node.type == "agent" and agent is None:
-                raise ValueError(f"Workflow node '{node.id}' references unavailable agent '{node.agent_id}'")
-            runnable = self._langchain_runnable_for_agent(agent) if agent is not None else None
-
-            async def run_node(state: WorkflowState, *, node=node, agent=agent, runnable=runnable) -> dict:
-                input_text = self._workflow_node_input(
-                    team,
-                    workflow_id,
-                    state["original_request"],
-                    node,
-                    predecessors[node.id],
-                    state["outputs"],
-                )
-                context = [state["outputs"][source] for source in predecessors[node.id] if source in state["outputs"]]
-                if node.type == "agent" and agent is not None and runnable is not None:
-                    self.queue.insert_agent_message(agent.id, "user", input_text, str(message.id), sender=f"workflow:{workflow_id}")
-                    run = await runnable.ainvoke(
-                        {
-                            "input": input_text,
-                            "context": context,
-                            "teams": [team],
-                            "project_workspace": self._project_workspace_for_message(message),
-                        }
-                    )
-                    self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
-                    await self._handle_team_tags(team, run, message, agents, enqueue_mentions=team.max_rounds <= 1)
-                elif node.type == "start":
-                    run = AgentRun(agent_id=node.id, input=input_text, output=state["original_request"])
-                elif node.type == "end":
-                    output = context[-1] if context else state["original_request"]
-                    run = AgentRun(agent_id=node.id, input=input_text, output=output)
-                else:
-                    output = node.prompt or (context[-1] if context else state["original_request"])
-                    run = AgentRun(agent_id=node.id, input=input_text, output=output)
-                return {
-                    "outputs": {node.id: run.output},
-                    "runs_by_node": {node.id: run},
-                    "runs": [run],
-                    "run_order": [node.id],
-                }
-
-            graph.add_node(node_id, run_node)
-
-        graph.set_entry_point(entrypoint)
-        for source, target in edge_pairs:
-            graph.add_edge(source, target)
-        for conditional_edge in conditional_edges:
-            route_map = {route.condition: route.target for route in conditional_edge.routes}
-            default_route = "__default__"
-            route_map[default_route] = conditional_edge.default_target or END
-            source_node = node_by_id[conditional_edge.source]
-            custom_route = self._compile_workflow_routing_function(source_node) if source_node.routing_function else None
-
-            def route_from_output(
-                state: WorkflowState,
-                *,
-                conditional_edge=conditional_edge,
-                route_map=route_map,
-                custom_route=custom_route,
-            ) -> str:
-                if custom_route is not None:
-                    route = custom_route(state)
-                else:
-                    source_output = state["outputs"].get(conditional_edge.source, "")
-                    route = self._route_from_output(source_output, [route.condition for route in conditional_edge.routes])
-                selected_route = route if route in route_map else default_route
-                target = route_map[selected_route]
-                self.events.emit(
-                    "team.workflow.route",
-                    {
-                        "team_id": team.id,
-                        "workflow_id": workflow_id,
-                        "source": conditional_edge.source,
-                        "route": selected_route,
-                        "target": target if target != END else "END",
-                    },
-                )
-                return selected_route
-
-            graph.add_conditional_edges(conditional_edge.source, route_from_output, route_map)
-
-        terminal_nodes = [node_id for node_id in node_by_id if not outgoing.get(node_id)]
-        for node_id in terminal_nodes:
-            graph.add_edge(node_id, END)
-        compiled = graph.compile()
-        self.events.emit("team.workflow.runtime", {"runtime": "langgraph"})
-        return compiled
-
-    @staticmethod
-    def _compile_workflow_routing_function(node) -> Any:
-        routing_function = node.routing_function
-        if routing_function is None:
-            raise ValueError(f"Workflow node '{node.id}' does not define routingFunction")
-        if routing_function.language != "python":
-            raise ValueError(
-                f"Workflow node '{node.id}' routingFunction language '{routing_function.language}' is not supported"
-            )
-        namespace: dict[str, Any] = {}
-        safe_builtins = {
-            "all": all,
-            "any": any,
-            "bool": bool,
-            "dict": dict,
-            "float": float,
-            "int": int,
-            "len": len,
-            "list": list,
-            "max": max,
-            "min": min,
-            "set": set,
-            "sorted": sorted,
-            "str": str,
-            "sum": sum,
-            "tuple": tuple,
-        }
-        globals_dict = {"__builtins__": safe_builtins, "json": json}
-        try:
-            exec(routing_function.code, globals_dict, namespace)
-        except Exception as exc:
-            raise ValueError(f"Workflow node '{node.id}' routingFunction failed to compile: {exc}") from exc
-        route_callable = namespace.get(routing_function.entrypoint) or globals_dict.get(routing_function.entrypoint)
-        if not callable(route_callable):
-            raise ValueError(
-                f"Workflow node '{node.id}' routingFunction entrypoint '{routing_function.entrypoint}' is not callable"
-            )
-
-        def route(state: WorkflowState) -> str:
-            try:
-                selected_route = route_callable(state)
-            except Exception as exc:
-                raise ValueError(f"Workflow node '{node.id}' routingFunction failed: {exc}") from exc
-            if not isinstance(selected_route, str):
-                raise ValueError(f"Workflow node '{node.id}' routingFunction must return a string route")
-            return selected_route
-
-        return route
-
-    @staticmethod
-    def _route_from_output(output: str, conditions: list[str]) -> str:
-        try:
-            parsed = json.loads(output)
-            if isinstance(parsed, dict):
-                route = parsed.get("route")
-                if isinstance(route, str):
-                    return route
-        except json.JSONDecodeError:
-            pass
-        lowered_output = output.lower()
-        for condition in conditions:
-            if condition.lower() in lowered_output:
-                return condition
-        return "__default__"
+    def _summarize_workflow_output(text: str, max_length: int = 240) -> str:
+        
+        '''TODO: use LLM summarize'''
+        cleaned = " ".join(line.strip() for line in text.splitlines() if line.strip())
+        if not cleaned:
+            return "(empty)"
+        if len(cleaned) <= max_length:
+            return cleaned
+        return f"{cleaned[: max_length - 1].rstrip()}…"
 
     async def _run_iterative_rounds(
         self,
@@ -568,7 +296,7 @@ class Orchestrator:
     ) -> list[AgentRun]:
         agent_by_id = {agent.id: agent for agent in agents}
         produced: list[AgentRun] = []
-        frontier = self._mentions_from_runs(team, seed_runs, agents)
+        frontier = self.teams.mentions_from_runs(seed_runs, agents)
         seen_pairs: set[tuple[str, str]] = set()
         current_round = 1
         while frontier and current_round < max_rounds:
@@ -593,7 +321,7 @@ class Orchestrator:
                 produced.append(run)
                 self.queue.insert_agent_message(agent.id, "assistant", run.output, str(message.id), sender=agent.id)
                 await self._handle_team_tags(team, run, message, agents, enqueue_mentions=False)
-                next_frontier.extend(self._mentions_from_runs(team, [run], agents))
+                next_frontier.extend(self.teams.mentions_from_runs([run], agents))
             if not next_frontier and team.stop_when_idle:
                 break
             frontier = next_frontier
@@ -601,67 +329,6 @@ class Orchestrator:
         if produced:
             self.events.emit("team.iteration", {"team_id": team.id, "rounds": current_round, "runs": len(produced)})
         return produced
-    @staticmethod
-    def _agent_lookup(agents: list[Agent]) -> dict[str, str]:
-        return {agent.id.lower(): agent.id for agent in agents}
-    def _mentions_from_runs(self, team: Team, runs: list[AgentRun], agents: list[Agent]) -> list[tuple[str, str, str]]:
-        agent_by_lookup = self._agent_lookup(agents)
-        mentions: list[tuple[str, str, str]] = []
-        for run in runs:
-            shared_context = strip_tags(run.output, "@")
-            seen: set[str] = set()
-            for raw_ids, content in extract_tags(run.output, "@"):
-                for candidate_id in split_candidate_ids(raw_ids):
-                    teammate_id = agent_by_lookup.get(candidate_id)
-                    if teammate_id is None or teammate_id in seen or teammate_id == run.agent_id:
-                        continue
-                    seen.add(teammate_id)
-                    routed_content = f"{shared_context}\n\n------\n\nDirected to you:\n{content}" if shared_context else content
-                    mentions.append((run.agent_id, teammate_id, routed_content))
-        return mentions
-
-    def _member_chain_input(
-        self,
-        team: Team,
-        original_request: str,
-        leader_run: AgentRun,
-        previous_member_runs: list[AgentRun],
-        member_id: str,
-    ) -> str:
-        shared_context = strip_tags(leader_run.output, "@")
-        directed = get_directed_messages(leader_run.output, member_id)
-        chunks = [
-            f"Team #{team.id} request:\n{original_request}",
-            f"Team leader @{leader_run.agent_id} context:\n{shared_context or leader_run.output}",
-        ]
-        if directed:
-            chunks.append("Directed to you:\n" + "\n\n".join(directed))
-        else:
-            chunks.append("Directed to you:\nContribute your part based on the team leader context above.")
-        if previous_member_runs:
-            chunks.append("Previous teammate results:\n" + self._format_runs(previous_member_runs))
-        return "\n\n------\n\n".join(chunks)
-
-    def _leader_summary_input(
-        self,
-        team: Team,
-        original_request: str,
-        leader_run: AgentRun,
-        member_runs: list[AgentRun],
-    ) -> str:
-        return "\n\n------\n\n".join(
-            [
-                f"Team #{team.id} original request:\n{original_request}",
-                f"Your initial team direction:\n{leader_run.output}",
-                "Teammate results:\n" + self._format_runs(member_runs),
-                "Produce the final team response for the user. Synthesize the teammate results, keep important details, and call out any unresolved work.",
-            ]
-        )
-
-    @staticmethod
-    def _format_runs(runs: list[AgentRun]) -> str:
-        return "\n\n".join(f"## @{run.agent_id}\n{run.output}" for run in runs)
-
     async def _handle_team_tags(
         self,
         team: Team,
@@ -671,12 +338,12 @@ class Orchestrator:
         enqueue_mentions: bool = True,
         process_chatrooms: bool = True,
     ) -> None:
-        agent_by_lookup = self._agent_lookup(agents)
+        agent_by_lookup = self.teams.agent_lookup(agents)
         if process_chatrooms:
             for team_id, content in extract_tags(run.output, "#"):
                 if team_id.lower() == team.id.lower():
                     self.chat.post(team.id, ChatMessageCreate(sender=run.agent_id, message=content))
-                    delivered = self._broadcast_chatroom(team, run.agent_id, content, agents, message)
+                    delivered = self.chat.broadcast_chatroom(self.queue, team, run.agent_id, content, agents, message)
                     self.events.emit("team.chatroom", {"team_id": team.id, "from_agent": run.agent_id, "delivered": delivered})
 
         shared_context = strip_tags(run.output, "@")
@@ -695,7 +362,7 @@ class Orchestrator:
                         target=f"@agent:{teammate_id}",
                         content=routed_content,
                         sender=f"team:{team.id}:{run.agent_id}",
-                        metadata=self._team_child_metadata(
+                        metadata=self.chat.team_child_metadata(
                             message,
                             team=team,
                             from_agent=run.agent_id,
@@ -710,7 +377,7 @@ class Orchestrator:
                 )
 
     async def _handle_direct_agent_team_tags(self, agent: Agent, run: AgentRun, message: QueueMessage) -> None:
-        agent_teams = self._teams_for_agent(agent.id)
+        agent_teams = self.teams.for_agent(agent.id)
         if not agent_teams:
             return
 
@@ -721,100 +388,37 @@ class Orchestrator:
             agents_by_team[team.id] = members
 
         for team_id, content in extract_tags(run.output, "#"):
-            team = self._resolve_team_for_tag(team_id, agent_teams, agent.id)
+            team = self.teams.resolve_team_for_tag(team_id, agent_teams, agent.id)
             if team is None:
                 continue
             self.chat.post(team.id, ChatMessageCreate(sender=agent.id, message=content))
-            delivered = self._broadcast_chatroom(team, agent.id, content, agents_by_team[team.id], message)
+            delivered = self.chat.broadcast_chatroom(self.queue, team, agent.id, content, agents_by_team[team.id], message)
             self.events.emit("team.chatroom", {"team_id": team.id, "from_agent": agent.id, "delivered": delivered})
 
-        mention_team = self._resolve_team_context_for_agent(agent.id, agent_teams)
+        mention_team = self.teams.resolve_team_context_for_agent(agent.id, agent_teams)
         if mention_team is not None:
             await self._handle_team_tags(mention_team, run, message, agents_by_team[mention_team.id], process_chatrooms=False)
 
-    def _broadcast_chatroom(self, team: Team, from_agent: str, content: str, agents: list[Agent], parent: QueueMessage) -> int:
-        delivered = 0
-        agent_ids = {agent.id for agent in agents}
-        chat_message = f"[Chat room #{team.id} - @{from_agent}]:\n{content}"
-        for teammate_id in team.agent_ids:
-            if teammate_id == from_agent or teammate_id not in agent_ids:
-                continue
-            self.queue.enqueue(
-                MessageCreate(
-                    target=f"@agent:{teammate_id}",
-                    content=chat_message,
-                    sender=f"chatroom:{team.id}:{from_agent}",
-                    metadata=self._team_child_metadata(
-                        parent,
-                        team=team,
-                        from_agent=from_agent,
-                        kind="chatroom",
-                        to_agent=teammate_id,
-                    ),
-                )
-            )
-            delivered += 1
-        return delivered
-
-    def _post_chatroom_run_outputs(self, team: Team, runs: list[AgentRun]) -> None:
-        for run in runs:
-            message = strip_tags(run.output, "#").strip()
-            if message:
-                self.chat.post(team.id, ChatMessageCreate(sender=run.agent_id, message=message))
-
-    @staticmethod
-    def _is_chatroom_origin(message: QueueMessage) -> bool:
-        return message.metadata.get("channel") == "chatroom" or message.metadata.get("teamId")
-
-    @staticmethod
-    def _team_child_metadata(
-        parent: QueueMessage | None,
+    def dispatch_team_message(
+        self,
+        team_id: str,
+        message: str,
         *,
-        team: Team,
-        from_agent: str,
-        kind: str,
-        to_agent: str,
-    ) -> dict:
-        parent_metadata = parent.metadata if parent else {}
-        metadata = {
-            "kind": kind,
-            "teamId": team.id,
-            "fromAgent": from_agent,
-            "toAgent": to_agent,
-            "parentMessageId": str(parent.id) if parent else None,
-            "parentTarget": parent.target if parent else None,
-            "channel": parent_metadata.get("channel", "team"),
-            "sender": parent.sender if parent else "",
-            "senderId": parent_metadata.get("senderId") or parent_metadata.get("sender_id"),
-            "projectId": parent_metadata.get("projectId") or parent_metadata.get("project_id"),
-        }
-        return {key: value for key, value in metadata.items() if value is not None}
-
-    @staticmethod
-    def _order_agents_for_team(team: Team, agents: list[Agent]) -> list[Agent]:
-        if not team.leader_agent:
-            return agents
-        leaders = [agent for agent in agents if agent.id == team.leader_agent]
-        others = [agent for agent in agents if agent.id != team.leader_agent]
-        return leaders + others if leaders else agents
-
-    def _teams_for_agent(self, agent_id: str) -> list[Team]:
-        return [team for team in self.teams.list() if agent_id in team.agent_ids]
-
-    @staticmethod
-    def _resolve_team_context_for_agent(agent_id: str, teams: list[Team]) -> Team | None:
-        for team in teams:
-            if team.leader_agent == agent_id and agent_id in team.agent_ids:
-                return team
-        return teams[0] if teams else None
-
-    @staticmethod
-    def _resolve_team_for_tag(team_id: str, teams: list[Team], agent_id: str) -> Team | None:
-        lookup = team_id.lower()
-        for team in teams:
-            if team.id.lower() == lookup and agent_id in team.agent_ids:
-                return team
-        return None
+        sender: str = "user",
+        chat_message_id: int | None = None,
+        conn: Any | None = None,
+        emit_event: bool = True,
+    ) -> dict[str, Any]:
+        team = self.teams.get(team_id)
+        return self.chat.dispatch_team_message(
+            self.queue,
+            team,
+            message,
+            sender=sender,
+            chat_message_id=chat_message_id,
+            conn=conn,
+            emit_event=emit_event,
+        )
 
     async def _run_agent(
         self,
@@ -828,84 +432,18 @@ class Orchestrator:
         teams: list[Team] | None = None,
         project_workspace: Path | None = None,
     ) -> AgentRun:
-        if not agent.enabled:
-            raise ValueError(f"Agent '{agent.id}' is disabled")
-        provider = self.providers.get(agent.provider)
-        active_teams = teams if teams is not None else self._teams_for_agent(agent.id)
-        system_prompt = self.agents.build_system_prompt(
-            agent.id,
-            teammates=self.agents.build_teammate_block(agent.id, active_teams),
+        return await self.agents.run_agent(
+            agent,
+            input_text,
+            context,
+            providers=self.providers,
+            events=self.events,
+            message_id=message_id,
+            session_id=session_id,
+            run_id=run_id,
+            teams=teams if teams is not None else self.teams.for_agent(agent.id),
             project_workspace=project_workspace,
         )
-        if agent.id not in self._initialized_workspaces:
-            provider.setup_workspace(agent.workspace)
-            self._initialized_workspaces.add(agent.id)
-            
-        message_id_text = str(message_id) if message_id is not None else None
-        session_id_text = session_id or message_id_text
-        run_id_text = run_id or uuid4().hex
-
-        self.events.emit(
-            "agent.started",
-            {
-                "agent_id": agent.id,
-                "provider": agent.provider,
-                "message_id": message_id_text,
-                "session_id": session_id_text,
-                "run_id": run_id_text,
-            },
-        )
-
-        def progress(payload: dict) -> None:
-            normalized_payload = {
-                "agent_id": agent.id,
-                "provider": agent.provider,
-                "message_id": message_id_text,
-                "session_id": session_id_text,
-                "run_id": run_id_text,
-                **payload,
-            }
-            self.events.emit("agent.progress", normalized_payload)
-
-        runtime_agent = agent.model_copy(update={"system_prompt": system_prompt})
-        reset_session = agent.id in self._reset_agents
-        if reset_session:
-            self._reset_agents.discard(agent.id)
-        additional_workspaces = [project_workspace] if project_workspace is not None else []
-        response = await provider.run(
-            ProviderRequest(
-                agent=runtime_agent,
-                input=input_text,
-                context=context,
-                additional_workspaces=additional_workspaces,
-                reset=reset_session,
-                progress=progress,
-            )
-        )
-        process = (response.raw or {}).get("process") if response.raw else None
-        if process:
-            self.events.emit(
-                "agent.process",
-                {
-                    "agent_id": agent.id,
-                    "provider": agent.provider,
-                    "message_id": message_id_text,
-                    "session_id": session_id_text,
-                    "run_id": run_id_text,
-                    "process": process,
-                },
-            )
-        self.events.emit(
-            "agent.completed",
-            {
-                "agent_id": agent.id,
-                "message_id": message_id_text,
-                "session_id": session_id_text,
-                "run_id": run_id_text,
-                "content": response.text,
-            },
-        )
-        return AgentRun(agent_id=agent.id, input=input_text, output=response.text)
 
     def _agent_for_message(self, agent_id: str, message: QueueMessage) -> Agent:
         return self.agents.get(agent_id)

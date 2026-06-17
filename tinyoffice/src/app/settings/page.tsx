@@ -82,7 +82,7 @@ export default function SettingsPage() {
             Settings
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            View and edit TinyAGI configuration
+            View and edit PocketStudio configuration
           </p>
         </div>
         {settings && (

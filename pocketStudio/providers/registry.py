@@ -20,7 +20,7 @@ class ProviderRegistry:
         codex_provider = CodexProvider(registry=self.processes)
         claude_provider = ClaudeProvider(registry=self.processes)
         self._providers: dict[str, AgentProvider] = {
-            # "local": LocalEchoProvider(),
+            "local": LocalEchoProvider(),
             # "openai": codex_provider,
             "codex": codex_provider,
             # "anthropic": claude_provider,

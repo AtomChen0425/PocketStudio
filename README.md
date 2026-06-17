@@ -1,70 +1,121 @@
-# pocketStudio
 
-pocketStudio is a Python/FastAPI multi-agent orchestration backend inspired by TinyAGI. It brings agents, teams, tasks, queues, chatrooms, schedules, event streams, and local workspaces into one lightweight runtime for running collaborative AI agents on your machine.
+<div align="center">
+  <img src="./docs/assets/ICON.jpg" alt="PocketStudio" width="200" />
+  <h1>PocketStudio</h1>
+  <p><strong>Multi-agent, multi-team, multi-channel AI assistant runtime built with Python and FastAPI.</strong></p>
+  <p>Run teams of AI agents with isolated workspaces, persistent queues, project tasks, chat rooms, scheduled work, heartbeat monitoring, and a browser dashboard.</p>
+  <
+</div>
 
-The repository also includes an adapted TinyOffice frontend and a `pocketstudio` command-line control plane.
+![PocketStudio working dashboard](docs/assets/Working.png)
 
-Chinese version: [README_CN.md](./docs/README_CN.md)
+## Community
 
-## Core Features
+This repository is a Python/FastAPI implementation inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi). For upstream TinyAGI community links, see the [TinyAGI](https://github.com/TinyAGI/tinyagi) project.
 
-- Agent management: create, update, delete agents, and initialize an isolated workspace for each one.
-- Skill sync: root skills from `.agents/skills/` are copied into agent workspaces and exposed through `.codex/skills` and `.claude/skills`.
-- Provider adapters: supports `local`, OpenAI-compatible providers, Codex, Claude, OpenCode, and custom providers.
-- Team orchestration: supports `chain` and `fanout`. In `chain` mode, the team leader plans first, members execute, and the leader summarizes member results.
-- Queue system: durable SQLite message queue with running/done/failed/dead states, retries, stale-processing recovery, and response queues.
-- Chatroom: team members can broadcast with `[#team: message]` or communicate through the chatroom API.
-- Projects and tasks: built-in projects, tasks, comments, task ordering, and assignee management.
-- Schedules and heartbeat: scheduled tasks, manual fire, agent heartbeat tick, and heartbeat state cleanup.
-- Runtime progress visibility: the Codex provider maps displayable runtime events, tool calls, and progress summaries into SSE and the visualizer.
-- Terminal visualizer: live in-place refresh for team runtime state and chatrooms in CMD or PowerShell.
-- TinyOffice frontend: `tinyoffice/` provides a web UI for managing agents, teams, tasks, settings, and runtime state.
 
-## Repository Layout
+## Features
 
-```text
-pocketStudio/              FastAPI backend, services, providers, CLI
-pocketStudio/api/          REST API routes
-pocketStudio/services/     agent/team/queue/task/schedule/worker services
-pocketStudio/providers/    local/openai/codex/claude/opencode provider adapters
-pocketStudio/channels/     external message channels
-tinyoffice/                Next.js frontend
-tests/                     pytest tests
-docs/                      structure docs, function index, TinyAGI mapping
-tools/                     maintenance scripts such as docs generation
-.agents/skills/            root shared skills
-.pocketStudio/             default runtime data directory
+- ✅ **Multi-agent runtime**: create isolated agents with their own workspace, memory, prompts, skills, and conversation state.
+- ✅ **Multi-team collaboration**: run teams in sequential `chain`, parallel `fanout`, or workflow-driven modes.
+- ✅ **LangGraph-driven workflows**: configure per-team workflow graphs with start, agent, tool, end, and conditional routing nodes.
+- ✅ **Team chat rooms**: persistent Slack-style rooms with CLI viewer, API endpoints, and agent broadcast tags.
+- ✅ **Multi-channel foundation**: web/API messaging plus Telegram channel service and pairing controls.
+- ✅ **Office web portal**: browser UI for agents, teams, tasks, projects, logs, settings, queue state, and runtime activity.
+- ✅ **Multiple AI providers**: local dry-run provider, Codex, Nanobot.
+- ✅ **Durable SQLite queue**: queued/running/done/failed/dead states, retries, stale recovery, response jobs, and diagnostics.
+- ✅ **Background worker**: daemon-compatible processor for queue messages, schedules, heartbeat ticks, and maintenance.
+- ✅ **Projects and tasks**: project-scoped workspaces, Kanban-like task states, assignees, comments, ordering, and archive support.
+- ✅ **Live observability**: SSE events, Office-compatible event mapping, process metadata, logs, queue diagnostics, and CLI visualizer.
+- ✅**Persistent operation**: local daemon process, runtime home directory, settings, logs, and agent workspaces.
+
+## Gallery
+
+All current product screenshots and workflow visuals are collected here for quick browsing.
+
+<table>
+  <tr>
+    <td width="50%">
+      <strong>Working Dashboard</strong><br />
+      <img src="docs/assets/Working.png" alt="PocketStudio working dashboard" width="100%" />
+    </td>
+    <td width="50%">
+      <strong>TinyOffice Portal</strong><br />
+      <img src="docs/assets/Office.png" alt="TinyOffice portal" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <strong>Organization View</strong><br />
+      <img src="docs/assets/Company.png" alt="Organization view" width="100%" />
+    </td>
+    <td width="50%">
+      <strong>LangGraph Workflow Settings</strong><br />
+      <img src="docs/assets/TeamSetting.png" alt="Team workflow settings" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <strong>Agents Setting</strong><br />
+      <img src="docs/assets/agents.png" alt="Agents Setting" width="100%" />
+    </td>
+    <td width="50%">
+      <strong>Completed Work View</strong><br />
+      <img src="docs/assets/Done.png" alt="Completed work view" width="100%" />
+    </td>
+  </tr>
+</table>
+
+### Example
+**This is a webpage generated with a single click using this platform.**
+![Example](docs/assets/template.png)
+
+https://atomchen0425.github.io/AI_Generate_Project/
+
+
+**Task description:**
+```
+The project root directory for this photography portfolio website is explicitly declared as:`D:\Coding\TestFolder\Photograph`
+
+Build a modern, minimalist responsive photography portfolio website.
+### Design System & Aesthetics:
+- Vibe: Premium, cinematic, clean, gallery-like, dark/light theme (default to dark theme to make photos pop).
+- Colors: Pure dark background (#0D0D0D), muted white text (#E5E5E5), and subtle accents.
+- Typography: Clean sans-serif for UI, elegant serif/display font for headers (e.g., Playfair Display or Inter).
+- Spacing: Generous whitespace, thin clean borders, masonry-grid/infinite-scroll layout for galleries.
+
+### Site Structure & Routes:
+1. / (Home/Gallery): A masonry grid layout displaying featured photography works. Images should have a subtle hover effect (e.g., slight scale-up, reveal photo title/metadata like focal length/aperture). Clicking a photo opens a beautiful full-screen immersive lightbox modal.
+2. /about: A clean, editorial-style "About Me" page split into two columns: one for a professional portrait, the other for an artist statement, tech/gear stack, and contact links.
+3. /collections (or Categories): Filterable tabs (e.g., Street, Portrait, Cinematic, Landscape) that smoothly re-arrange the image grid using animations (Framer Motion preferred).
+
+Please provide the structural layout and the main page.tsx code with smooth transition animations.
+
+
 ```
 
-## Requirements
+
+## Quick Start
+
+### Prerequisites
 
 - Python 3.11+
-- Node.js 20+, only needed for the TinyOffice frontend
-- Windows PowerShell or CMD
+- Node.js 20+ for the TinyOffice frontend
+- Windows PowerShell or CMD, or a compatible shell on another OS
+- Optional provider CLIs/API keys for Codex, Claude, OpenCode, Nanobot, or OpenAI-compatible providers
 
-The current development environment usually uses:
+### Installation and First Run
 
-```powershell
-D:\Coding\anaconda\envs\MultiAgent\python.exe
-```
-
-You can also use a standard venv:
+From this repository:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -e ".[test]"
-```
-
-## Start The Backend
-
-Development mode:
-
-```powershell
 python -m uvicorn pocketStudio.main:app --host 127.0.0.1 --port 3777 --reload
 ```
 
-Using the project Python:
+Or use the project Python used by this workspace:
 
 ```powershell
 D:\Coding\anaconda\envs\MultiAgent\python.exe -m uvicorn pocketStudio.main:app --host 127.0.0.1 --port 3777
@@ -72,13 +123,17 @@ D:\Coding\anaconda\envs\MultiAgent\python.exe -m uvicorn pocketStudio.main:app -
 
 Open:
 
-- API docs: http://127.0.0.1:3777/docs
-- Built-in simple UI: http://127.0.0.1:3777/
-- API prefix: http://127.0.0.1:3777/api
+- API docs: `http://127.0.0.1:3777/docs`
+- API base: `http://127.0.0.1:3777/api`
 
-## CLI Usage
+Default runtime data:
 
-After editable installation, the `pocketstudio` command is available:
+- Runtime home: `.pocketStudio/`
+- Settings: `.pocketStudio/settings.json`
+- SQLite database: `.pocketStudio/pocketstudio.db`
+- Agent workspaces: `.pocketStudio/workspace/<agent_id>/`
+
+### Development From Source
 
 ```powershell
 python -m pip install -e ".[test]"
@@ -86,76 +141,28 @@ pocketstudio version
 pocketstudio status
 ```
 
-Common commands:
+Start the local API daemon:
 
 ```powershell
 pocketstudio daemon start
 pocketstudio daemon status
+```
+
+Stop it:
+
+```powershell
 pocketstudio daemon stop
-
-pocketstudio agent list
-pocketstudio agent add coder --name "Coder" --role "Python engineer" --provider local
-pocketstudio team add dev --name "Dev Team" --agent coder --leader coder
-
-pocketstudio send "@team:dev Plan a FastAPI service" --channel web --sender Web
-pocketstudio queue status
-pocketstudio worker tick
 ```
 
-Providers and processes:
+## TinyOffice Web Portal
 
-```powershell
-pocketstudio provider list
-pocketstudio provider custom
-pocketstudio process list
-pocketstudio process kill coder
-```
+![TinyOffice portal](docs/assets/Office.png)
 
-Tasks and projects:
+<!-- Video placeholder: docs/assets/tinyoffice-walkthrough.mp4 -->
 
-```powershell
-pocketstudio project list
-pocketstudio project add Platform --description "Backend work" --prefix PLAT
-pocketstudio task list
-pocketstudio task add "Wire backend" --assignee coder --assignee-type agent
-```
+pocketStudio includes an adapted TinyOffice frontend in [tinyoffice/](./tinyoffice) for managing agents, teams, tasks, projects, settings, queue state, events, and chat rooms.
 
-Schedules and heartbeat:
-
-```powershell
-pocketstudio schedule list
-pocketstudio schedule add --agent coder --message "Daily check" --cron "0 9 * * *"
-pocketstudio heartbeat status
-pocketstudio heartbeat tick --agent coder --force
-```
-
-## Visualizer
-
-Team runtime dashboard:
-
-```powershell
-pocketstudio visualize
-pocketstudio visualize --team dev
-```
-
-Snapshot mode for debugging or logs:
-
-```powershell
-pocketstudio visualize --once --no-clear
-```
-
-View and post to a chatroom:
-
-```powershell
-pocketstudio chatroom dev
-pocketstudio chatroom dev --send "hello team"
-```
-
-On Windows CMD, the visualizer tries to enable Virtual Terminal. If that is unavailable, it falls back to the Windows Console API for in-place clearing, so it should not keep appending refreshed frames.
-
-## TinyOffice Frontend
-
-Start the backend first, then run this in a second terminal:
+Start the backend first, then run the frontend:
 
 ```powershell
 cd tinyoffice
@@ -176,110 +183,311 @@ cd tinyoffice
 npm run build
 ```
 
-## REST API Quick Examples
+TinyOffice areas:
 
-Create an agent:
+- Dashboard: queue/system overview and event feed.
+- Chat Console: send messages to an agent or team.
+- Agents and Teams: create, edit, remove, and inspect runtime configuration.
+- Tasks and Projects: project boards, task assignment, ordering, comments, and status changes.
+- Logs and Events: inspect backend logs and streaming runtime events.
+- Settings: inspect and update local configuration.
+- Chat Rooms: persistent team rooms with dispatch status.
+- Office View and Org Chart: visual views of agents, teams, and runtime activity.
 
-```powershell
-Invoke-RestMethod -Method Post http://127.0.0.1:3777/api/agents -ContentType application/json -Body '{"id":"coder","name":"Coder","role":"Python engineer","provider":"local"}'
-```
+![Organization view](docs/assets/Company.png)
 
-Create a team:
+## Using Agents
 
-```powershell
-Invoke-RestMethod -Method Post http://127.0.0.1:3777/api/teams -ContentType application/json -Body '{"id":"dev","name":"Dev Team","mode":"chain","agent_ids":["coder"],"leaderAgent":"coder"}'
-```
-
-Send a message:
-
-```powershell
-Invoke-RestMethod -Method Post http://127.0.0.1:3777/api/messages -ContentType application/json -Body '{"target":"@team:dev","content":"Plan a FastAPI service","sender":"Web"}'
-```
-
-Process the next queued message:
-
-```powershell
-Invoke-RestMethod -Method Post http://127.0.0.1:3777/api/queue/process-next
-```
-
-View mapped office events:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:3777/api/events/office
-```
-
-SSE:
+Use explicit targets to route messages:
 
 ```text
-http://127.0.0.1:3777/api/events/stream
+@agent:coder fix the authentication bug
+@team:dev plan the backend migration
+help me with this
 ```
 
-## Team Collaboration Model
+Agent configuration is stored in SQLite and mirrored into settings where applicable. Each agent has:
 
-Teams support two modes:
+- Separate workspace directory under `.pocketStudio/workspace/<agent_id>/` by default.
+- Its own `AGENTS.md`, `heartbeat.md`, `.pocketStudio/SOUL.md`, and `memory/` folder.
+- Synced skills from `.agents/skills/`.
+- Provider configuration such as `local`, `codex`, `nanobot`, or custom providers.
+- Independent reset and provider runtime state.
 
-- `chain`: the leader runs first, members run in sequence, then the leader summarizes all member results.
-- `fanout`: all members run concurrently, and the final output is grouped by agent.
+Example agent setup:
 
-Agents can use tags in their output to trigger team communication:
+```powershell
+pocketstudio agent add coder --name "Coder" --role "Python engineer" --provider local
+pocketstudio agent add reviewer --name "Reviewer" --role "Reviews code" --provider local
+pocketstudio team add dev --name "Development Team" --agent coder --leader coder
+pocketstudio team add-member dev reviewer
+pocketstudio send "@team:dev Review and improve the API"
+```
+
+### LangGraph Workflows
+
+pocketStudio now supports LangGraph-driven team workflows. A team can execute a graph of workflow nodes instead of only running a simple chain or fan-out.
+
+Workflow mode supports:
+
+- Start, agent, tool, and end nodes.
+- Directed edges between workflow nodes.
+- Conditional edges routed from JSON output or text matching.
+- Python routing functions for advanced branching.
+- Per-node input templates with upstream predecessor output.
+- Project workspace injection for workflow agent runs.
+
+The workflow executor lives in `WorkflowService`, while `Orchestrator` stays a thin queue dispatch facade.
+
+## Architecture
+
+### Message Flow Diagram
 
 ```text
-[@coder: implement the API]
-[@coder,reviewer: inspect queue handling]
-[#dev: post this to the team chatroom]
+Message Channels
+  Web, API, CLI, Telegram, compatibility channel adapters
+        |
+        | enqueue()
+        v
+.pocketStudio/pocketstudio.db (SQLite)
+  messages: queued -> running -> done / failed / dead
+  responses: pending -> acked
+  agent_messages: per-agent conversation records
+        |
+        | WorkerService / manual process
+        v
+Orchestrator facade
+  target parse -> agent/team/workflow dispatch
+        |
+        +------------+------------+
+        v            v            v
+   AgentService  TeamService  WorkflowService
+        |            |            |
+        v            v            v
+ ProviderRegistry  ChatService  QueueService
+        |
+        v
+ provider adapter process/API call
 ```
 
-`[@agent: ...]` creates directed teammate messages. `[#team: ...]` writes to the chatroom and broadcasts to other team members.
+Workflow teams enter the `WorkflowService` path, where LangGraph compiles the active workflow definition, invokes agent nodes through `AgentService`, records queue history through `QueueService`, and posts final team output through `ChatService`.
 
-## Runtime Data
+### Key Services
 
-Default runtime directory:
+- `pocketStudio/main.py`: FastAPI application, routers, static UI, lifespan hooks.
+- `pocketStudio/api/`: REST API and compatibility routes.
+- `pocketStudio/services/orchestrator.py`: thin queue dispatch facade.
+- `pocketStudio/services/agent_service.py`: agent CRUD, workspace setup, system prompts, runtime invocation.
+- `pocketStudio/services/team_service.py`: team CRUD, member routing rules, chain/fanout helper logic.
+- `pocketStudio/services/workflow_service.py`: workflow CRUD, validation, LangGraph execution.
+- `pocketStudio/services/chat_service.py`: chatroom messages, dispatch tracking, team broadcast fan-out.
+- `pocketStudio/services/queue_service.py`: durable queue, response jobs, dead-letter and diagnostics.
+- `pocketStudio/providers/`: provider adapters and subprocess process registry.
+- `tinyoffice/`: Next.js web portal.
+
+### Repository Structure
 
 ```text
-.pocketStudio/
+TinyAgiPython/
+|-- pocketStudio/                  # FastAPI backend package
+|   |-- api/                       # REST routes
+|   |-- channels/                  # Channel integrations
+|   |-- core/                      # Settings, database, dependencies
+|   |-- models/                    # Pydantic models
+|   |-- providers/                 # Local, Codex, Claude, OpenCode, Nanobot adapters
+|   |-- services/                  # Agents, teams, queue, chat, workflow, worker
+|   `-- visualizer.py              # CLI visualizer and chatroom viewer
+|-- tinyoffice/                    # TinyOffice frontend
+|-- tests/                         # Pytest suite
+|-- docs/                          # Generated structure docs and mapping notes
+|-- tools/                         # Maintenance scripts
+|-- .agents/skills/                # Root shared skills
+`-- .pocketStudio/                 # Runtime data, created locally
 ```
 
-Common files:
+## Configuration
+
+### Settings File Reference
+
+Default settings path:
 
 ```text
 .pocketStudio/settings.json
-.pocketStudio/pocketStudio.db
-.pocketStudio/workspace/<agent_id>/
-.pocketStudio/logs/pocketstudio.log
 ```
 
-Useful environment variables:
+Representative structure:
+
+```json
+{
+  "agents": {
+    "coder": {
+      "name": "Coder",
+      "provider": "local",
+      "model": "",
+      "working_directory": ".pocketStudio/workspace/coder",
+      "system_prompt": "Python engineer"
+    }
+  },
+  "teams": {
+    "dev": {
+      "name": "Development Team",
+      "agents": ["coder", "reviewer"],
+      "leader_agent": "coder",
+      "mode": "chain",
+      "max_rounds": 1,
+      "stop_when_idle": true
+    }
+  },
+  "monitoring": {
+    "heartbeat_interval": 3600
+  }
+}
+```
+
+### Heartbeat Configuration
+
+Edit an agent heartbeat prompt:
 
 ```powershell
-$env:POCKETSTUDIO_POCKETSTUDIO_HOME="D:\path\to\runtime"
-$env:POCKETSTUDIO_SQLITE_JOURNAL_MODE="WAL"
-$env:POCKETSTUDIO_WORKER_ENABLED="true"
+notepad .pocketStudio\workspace\coder\heartbeat.md
 ```
 
-The default SQLite journal mode is `MEMORY`, which is friendlier for local Windows sandbox compatibility. For a more production-like local daemon, use `WAL`.
+Default heartbeat intent:
 
-## Tests
+```markdown
+Check for:
+1. Pending tasks
+2. Errors
+3. Unread messages
 
-Run the full test suite:
+Take action if needed.
+```
+
+### Runtime Directory Structure
+
+```text
+.pocketStudio/
+|-- settings.json
+|-- pocketstudio.db
+|-- logs/
+|   `-- pocketstudio.log
+|-- files/
+|-- workspace/
+|   |-- coder/
+|   |   |-- AGENTS.md
+|   |   |-- heartbeat.md
+|   |   |-- memory/
+|   |   `-- .pocketStudio/
+|   |       `-- SOUL.md
+|   `-- reviewer/
+`-- channels/
+```
+
+## Use Cases
+
+### Personal AI Assistant
+
+```text
+You: "Check my project queue every morning"
+pocketStudio: schedules a heartbeat or scheduled task for the chosen agent
+[Next run] Agent reviews tasks, messages, and runtime state, then reports back
+```
+
+### Multi-Agent Workflow
+
+```text
+@agent:coder implement the API changes
+@agent:writer document the new endpoints
+@agent:reviewer review the implementation notes
+```
+
+### Team Collaboration
+
+```text
+@team:dev fix the auth bug
+
+Flow:
+1. Team leader receives the request.
+2. Leader directs work with [@coder: ...] and [@reviewer: ...].
+3. Teammates run with isolated workspaces.
+4. Leader summarizes results for the user.
+```
+
+Teams support sequential chains, parallel fan-out, controlled iterative mention rounds, persistent chat rooms, and workflow graphs.
+
+### Project-Based Work
 
 ```powershell
-D:\Coding\anaconda\envs\MultiAgent\python.exe -B -m pytest tests -q -p no:cacheprovider
+pocketstudio project add Website --description "Landing page refresh" --prefix WEB
+pocketstudio task add "Review hero copy" --project PROJECT_ID --assignee writer --assignee-type agent
+pocketstudio send "@team:dev Work on PROJECT_ID tasks"
 ```
+![Project view](docs/assets/project.png)
+![Completed work view](docs/assets/Done.png)
 
-Focused tests:
 
-```powershell
-D:\Coding\anaconda\envs\MultiAgent\python.exe -B -m pytest tests\test_orchestrator.py -q -p no:cacheprovider
-D:\Coding\anaconda\envs\MultiAgent\python.exe -B -m pytest tests\test_visualizer.py tests\test_cli.py -q -p no:cacheprovider
-```
 
-After changing Python functions or modules, regenerate the structure and function docs:
+## 🗺️ Roadmap
 
-```powershell
-D:\Coding\anaconda\envs\MultiAgent\python.exe tools\generate_project_docs.py
-```
 
-## Maintenance Docs
+PocketStudio is evolving toward smoother multi-agent collaboration across teams, providers, channels, and devices.
 
-- `docs/PROJECT_STRUCTURE_AND_FUNCTIONS.md`: Chinese project structure and function index.
-- `docs/PROJECT_STRUCTURE_AND_FUNCTIONS.en.md`: English project structure and function index.
+---
+
+## 🤝 Smoother Collaboration
+
+
+- [ ] Improve agent-to-agent handoff for smoother context flow
+- [ ] Improve team chat as persistent collaboration space
+- [ ] Add long conversation summarization
+- [ ] Reduce friction across workflows, tasks, and direct agent work
+
+---
+
+## 🧠 Better Team Context
+
+
+- [ ] Improve context assembly for teams and workflows
+- [ ] Add richer workspace state (tasks, decisions, history)
+- [ ] Introduce explicit context boundaries (user/team/project/channel)
+- [ ] Add context compression for long multi-agent chains
+
+---
+
+## 🔌 Providers & Channels
+
+
+- [ ] Add more provider
+- [ ] Improve model support
+- [ ] Expand channel integrations beyond web/API/Telegram
+- [ ] Improve routing, permissions, and delivery system
+
+---
+
+## 🎨 UI & Product Experience
+
+
+- [ ] Improve layout structure for agents, tasks, workflows
+- [ ] Refine visual identity for TinyOffice / PocketStudio
+- [ ] Improve workflow editor (LangGraph-style UI)
+- [ ] Add runtime logs + queue visibility dashboard
+
+---
+
+## 📱 Multi-Device Collaboration
+
+
+- [ ] Cross-device sync for chat, tasks, workflows
+- [ ] Multi-user collaboration on same agent teams
+- [ ] Real-time notifications and proactive updates
+- [ ] Mobile-friendly interaction improvements
+## Credits
+
+- Inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi).
+- [Nanobot](https://github.com/HKUDS/nanobot)
+- Built with FastAPI, Pydantic, SQLite, LangGraph, and provider adapters for local and CLI-backed agents.
+- TinyOffice frontend adapted for the pocketStudio runtime.
+
+## License
+
+MIT

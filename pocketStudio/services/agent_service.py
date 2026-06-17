@@ -6,11 +6,18 @@ import re
 import shutil
 from hashlib import sha256
 from pathlib import Path
+from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
 from pocketStudio.core.json_store import read_json_object, write_json_object
-from pocketStudio.models import Agent, AgentCreate, Team
+from pocketStudio.models import Agent, AgentCreate, AgentRun, Team
+from pocketStudio.providers.base import ProviderRequest
+from pocketStudio.services.event_service import EventService
+
+if TYPE_CHECKING:
+    from pocketStudio.providers.registry import ProviderRegistry
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +54,8 @@ class AgentService:
         self.db = db
         self.settings = settings
         self._system_prompt_cache: dict[str, tuple[str, str]] = {}
+        self._initialized_workspaces: set[str] = set()
+        self._reset_agents: set[str] = set()
 
     def create(self, payload: AgentCreate) -> Agent:
         workspace = payload.workspace or self.settings.workspace_path / payload.id
@@ -166,6 +175,127 @@ class AgentService:
         self.ensure_workspace(agent.workspace)
         path = agent.workspace / "AGENTS.md"
         path.write_text(content, encoding="utf-8")
+
+    async def reset_runtime(
+        self,
+        agent_id: str,
+        *,
+        providers: ProviderRegistry,
+        events: EventService,
+        cleared: dict[str, int] | None = None,
+    ) -> dict:
+        agent = self.get(agent_id)
+        provider_reset = await providers.reset_agent(agent_id)
+        self._reset_agents.add(agent_id)
+        events.emit(
+            "agent.session.reset",
+            {
+                "agent_id": agent_id,
+                "provider": agent.provider,
+                "cleared": cleared,
+                "provider_reset": provider_reset,
+                "next_run_reset": True,
+            },
+        )
+        return {
+            "agentId": agent_id,
+            "cleared": cleared,
+            "providerReset": provider_reset,
+            "nextRunReset": True,
+        }
+
+    async def run_agent(
+        self,
+        agent: Agent,
+        input_text: str,
+        context: list[str],
+        *,
+        providers: ProviderRegistry,
+        events: EventService,
+        message_id: int | str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        teams: list[Team] | None = None,
+        project_workspace: Path | None = None,
+    ) -> AgentRun:
+        if not agent.enabled:
+            raise ValueError(f"Agent '{agent.id}' is disabled")
+        provider = providers.get(agent.provider)
+        active_teams = teams if teams is not None else []
+        system_prompt = self.build_system_prompt(
+            agent.id,
+            teammates=self.build_teammate_block(agent.id, active_teams),
+            project_workspace=project_workspace,
+        )
+        if agent.id not in self._initialized_workspaces:
+            provider.setup_workspace(agent.workspace)
+            self._initialized_workspaces.add(agent.id)
+
+        message_id_text = str(message_id) if message_id is not None else None
+        session_id_text = session_id or message_id_text
+        run_id_text = run_id or uuid4().hex
+
+        events.emit(
+            "agent.started",
+            {
+                "agent_id": agent.id,
+                "provider": agent.provider,
+                "message_id": message_id_text,
+                "session_id": session_id_text,
+                "run_id": run_id_text,
+            },
+        )
+
+        def progress(payload: dict) -> None:
+            normalized_payload = {
+                "agent_id": agent.id,
+                "provider": agent.provider,
+                "message_id": message_id_text,
+                "session_id": session_id_text,
+                "run_id": run_id_text,
+                **payload,
+            }
+            events.emit("agent.progress", normalized_payload)
+
+        runtime_agent = agent.model_copy(update={"system_prompt": system_prompt})
+        reset_session = agent.id in self._reset_agents
+        if reset_session:
+            self._reset_agents.discard(agent.id)
+        additional_workspaces = [project_workspace] if project_workspace is not None else []
+        response = await provider.run(
+            ProviderRequest(
+                agent=runtime_agent,
+                input=input_text,
+                context=context,
+                additional_workspaces=additional_workspaces,
+                reset=reset_session,
+                progress=progress,
+            )
+        )
+        process = (response.raw or {}).get("process") if response.raw else None
+        if process:
+            events.emit(
+                "agent.process",
+                {
+                    "agent_id": agent.id,
+                    "provider": agent.provider,
+                    "message_id": message_id_text,
+                    "session_id": session_id_text,
+                    "run_id": run_id_text,
+                    "process": process,
+                },
+            )
+        events.emit(
+            "agent.completed",
+            {
+                "agent_id": agent.id,
+                "message_id": message_id_text,
+                "session_id": session_id_text,
+                "run_id": run_id_text,
+                "content": response.text,
+            },
+        )
+        return AgentRun(agent_id=agent.id, input=input_text, output=response.text)
 
     def get_heartbeat_file(self, agent_id: str) -> dict:
         agent = self.get(agent_id)

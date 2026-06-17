@@ -51,7 +51,7 @@ def test_worker_maintenance_can_prune_chat_archives() -> None:
         assert detail.json()["messages"] == []
 
 
-def test_chatroom_post_enqueues_internal_member_messages_once() -> None:
+def test_chatroom_post_requires_explicit_dispatch_for_team_delivery() -> None:
     team_id = f"dispatch-chat-{uuid4().hex[:8]}"
 
     with TestClient(app) as client:
@@ -78,6 +78,17 @@ def test_chatroom_post_enqueues_internal_member_messages_once() -> None:
         assert posted.status_code == 200
         assert posted.json()["sender"] == "user"
         assert posted.json()["from_agent"] == "user"
+        assert posted.json().get("dispatch_status") is None
+
+        queued_before = client.get("/api/queue").json()
+        assert not any(item["metadata"].get("teamId") == team_id and item["metadata"].get("channel") == "chatroom" for item in queued_before)
+
+        dispatched = client.post(
+            f"/api/teams/{team_id}/dispatch",
+            json={"message": "hello team", "sender": "user", "chatMessageId": posted.json()["id"]},
+        )
+        assert dispatched.status_code == 200
+        assert dispatched.json()["queued"] == 2
 
         messages = client.get("/api/queue").json()
         chatroom_messages = [
@@ -85,3 +96,66 @@ def test_chatroom_post_enqueues_internal_member_messages_once() -> None:
         ]
         assert {item["target"] for item in chatroom_messages} == {f"@agent:{team_id}-a", f"@agent:{team_id}-b"}
         assert all(item["sender"] == "user" for item in chatroom_messages)
+        assert all(item["metadata"].get("parentMessageId") == f"chat:{posted.json()['id']}" for item in chatroom_messages)
+
+        chat_history = client.get(f"/api/chatroom/{team_id}").json()
+        assert any(
+            message["id"] == posted.json()["id"]
+            and message["dispatch_status"] == "dispatched"
+            and message["dispatch_queued_count"] == 2
+            for message in chat_history
+        )
+
+
+def test_chatroom_send_is_atomic_and_idempotent() -> None:
+    team_id = f"atomic-chat-{uuid4().hex[:8]}"
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/agents",
+            json={"id": f"{team_id}-a", "name": "A", "role": "A", "provider": "local"},
+        )
+        client.post(
+            "/api/agents",
+            json={"id": f"{team_id}-b", "name": "B", "role": "B", "provider": "local"},
+        )
+        client.post(
+            "/api/teams",
+            json={
+                "id": team_id,
+                "name": "Atomic Chat",
+                "mode": "chain",
+                "agent_ids": [f"{team_id}-a", f"{team_id}-b"],
+            },
+        )
+
+        client_message_id = f"client-{uuid4().hex[:8]}"
+        first = client.post(
+            f"/api/chatroom/{team_id}/send",
+            json={"message": "hello team", "sender": "user", "clientMessageId": client_message_id},
+        )
+        second = client.post(
+            f"/api/chatroom/{team_id}/send",
+            json={"message": "hello team", "sender": "user", "clientMessageId": client_message_id},
+        )
+
+        assert first.status_code == 200
+        assert first.json()["ok"] is True
+        assert first.json()["chatMessage"]["from_agent"] == "user"
+        assert first.json()["dispatch"]["queued"] == 1
+        assert first.json()["chatMessage"]["dispatch_status"] == "dispatched"
+        assert second.status_code == 200
+        assert second.json()["chatMessage"]["id"] == first.json()["chatMessage"]["id"]
+        assert second.json()["dispatch"]["messageIds"] == first.json()["dispatch"]["messageIds"]
+
+        messages = client.get("/api/queue").json()
+        chatroom_messages = [
+            item for item in messages if item["metadata"].get("teamId") == team_id and item["metadata"].get("channel") == "chatroom"
+        ]
+        assert len(chatroom_messages) == 1
+        assert chatroom_messages[0]["target"] == f"@team:{team_id}"
+        assert chatroom_messages[0]["metadata"].get("chatMessageId") == first.json()["chatMessage"]["id"]
+
+        chat_history = client.get(f"/api/chatroom/{team_id}").json()
+        assert sum(1 for message in chat_history if message["client_message_id"] == client_message_id) == 1
+        assert next(message for message in chat_history if message["client_message_id"] == client_message_id)["dispatch_status"] == "dispatched"
