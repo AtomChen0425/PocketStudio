@@ -424,6 +424,60 @@ Please provide the structural layout and the main page.tsx code with smooth tran
 ```
 
 
+## 🗺️ Roadmap
+
+
+PocketStudio is evolving toward smoother multi-agent collaboration across teams, providers, channels, and devices.
+
+---
+
+## 🤝 Smoother Collaboration
+
+
+- [ ] Improve agent-to-agent handoff for smoother context flow
+- [ ] Improve team chat as persistent collaboration space
+- [ ] Add long conversation summarization
+- [ ] Reduce friction across workflows, tasks, and direct agent work
+
+---
+
+## 🧠 Better Team Context
+
+
+- [ ] Improve context assembly for teams and workflows
+- [ ] Add richer workspace state (tasks, decisions, history)
+- [ ] Introduce explicit context boundaries (user/team/project/channel)
+- [ ] Add context compression for long multi-agent chains
+
+---
+
+## 🔌 Providers & Channels
+
+
+- [ ] Add more provider
+- [ ] Improve model support
+- [ ] Expand channel integrations beyond web/API/Telegram
+- [ ] Improve routing, permissions, and delivery system
+
+---
+
+## 🎨 UI & Product Experience
+
+
+- [ ] Improve layout structure for agents, tasks, workflows
+- [ ] Refine visual identity for TinyOffice / PocketStudio
+- [ ] Improve workflow editor (LangGraph-style UI)
+- [ ] Add runtime logs + queue visibility dashboard
+
+---
+
+## 📱 Multi-Device Collaboration
+
+
+- [ ] Cross-device sync for chat, tasks, workflows
+- [ ] Multi-user collaboration on same agent teams
+- [ ] Real-time notifications and proactive updates
+- [ ] Mobile-friendly interaction improvements
 ## Credits
 
 - Inspired by [TinyAGI](https://github.com/TinyAGI/tinyagi).
@@ -433,4 +487,3 @@ Please provide the structural layout and the main page.tsx code with smooth tran
 ## License
 
 MIT
-
