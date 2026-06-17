@@ -6,28 +6,21 @@ Run teams of AI agents with isolated workspaces, persistent queues, project task
 
 ![PocketStudio working dashboard](docs/assets/Working.png)
 
-<!-- Badge placeholder: experimental -->
-<!-- Badge placeholder: license -->
-<!-- Badge placeholder: community -->
-<!-- Video placeholder: docs/assets/PocketStudio-demo.mp4 -->
-
-Chinese version: [README_CN.md](./docs/README_CN.md)
 
 ## Features
 
-- Multi-agent runtime: create isolated agents with their own workspace, memory, prompts, skills, and conversation state.
-- Multi-team collaboration: run teams in sequential `chain`, parallel `fanout`, or workflow-driven modes.
-- LangGraph-driven workflows: configure per-team workflow graphs with start, agent, tool, end, and conditional routing nodes.
-- Team chat rooms: persistent Slack-style rooms with CLI viewer, API endpoints, and agent broadcast tags.
-- Multi-channel foundation: web/API messaging plus Telegram channel service and pairing controls.
-- TinyOffice web portal: browser UI for agents, teams, tasks, projects, logs, settings, queue state, and runtime activity.
-- Multiple AI providers: local dry-run provider, Codex, Nanobot, OpenAI-compatible endpoints, Claude, OpenCode, and custom providers.
-- Durable SQLite queue: queued/running/done/failed/dead states, retries, stale recovery, response jobs, and diagnostics.
-- Background worker: daemon-compatible processor for queue messages, schedules, heartbeat ticks, and maintenance.
-- Projects and tasks: project-scoped workspaces, Kanban-like task states, assignees, comments, ordering, and archive support.
-- Live observability: SSE events, Office-compatible event mapping, process metadata, logs, queue diagnostics, and CLI visualizer.
-- Plugin hooks: incoming/outgoing message hooks and event listeners through the plugin service.
-- Persistent operation: local daemon process, runtime home directory, settings, logs, and agent workspaces.
+- ✅ **Multi-agent runtime**: create isolated agents with their own workspace, memory, prompts, skills, and conversation state.
+- ✅ **Multi-team collaboration**: run teams in sequential `chain`, parallel `fanout`, or workflow-driven modes.
+- ✅ **LangGraph-driven workflows**: configure per-team workflow graphs with start, agent, tool, end, and conditional routing nodes.
+- ✅ **Team chat rooms**: persistent Slack-style rooms with CLI viewer, API endpoints, and agent broadcast tags.
+- ✅ **Multi-channel foundation**: web/API messaging plus Telegram channel service and pairing controls.
+- ✅ **Office web portal**: browser UI for agents, teams, tasks, projects, logs, settings, queue state, and runtime activity.
+- ✅ **Multiple AI providers**: local dry-run provider, Codex, Nanobot.
+- ✅ **Durable SQLite queue**: queued/running/done/failed/dead states, retries, stale recovery, response jobs, and diagnostics.
+- ✅ **Background worker**: daemon-compatible processor for queue messages, schedules, heartbeat ticks, and maintenance.
+- ✅ **Projects and tasks**: project-scoped workspaces, Kanban-like task states, assignees, comments, ordering, and archive support.
+- ✅ **Live observability**: SSE events, Office-compatible event mapping, process metadata, logs, queue diagnostics, and CLI visualizer.
+- ✅**Persistent operation**: local daemon process, runtime home directory, settings, logs, and agent workspaces.
 
 ## Gallery
 
@@ -172,159 +165,6 @@ TinyOffice areas:
 - Office View and Org Chart: visual views of agents, teams, and runtime activity.
 
 ![Organization view](docs/assets/Company.png)
-
-## Commands
-
-Commands work with the `pocketstudio` CLI after editable installation.
-
-### Core Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `version` | Show pocketStudio version | `pocketstudio version` |
-| `status` | Show system status | `pocketstudio status` |
-| `daemon start` | Start the local API daemon | `pocketstudio daemon start` |
-| `daemon stop` | Stop the daemon | `pocketstudio daemon stop` |
-| `daemon restart` | Restart the daemon | `pocketstudio daemon restart` |
-| `logs` | Show recent log lines | `pocketstudio logs --limit 100` |
-| `send` | Queue a message | `pocketstudio send "@team:dev Plan the API"` |
-| `visualize` | Open live team visualizer | `pocketstudio visualize --team dev` |
-
-### Agent Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `agent list` | List agents | `pocketstudio agent list` |
-| `agent add` | Add or update an agent | `pocketstudio agent add coder --name "Coder" --role "Python engineer" --provider local` |
-| `agent show <id>` | Show agent configuration | `pocketstudio agent show coder` |
-| `agent workspace <id>` | Show workspace status | `pocketstudio agent workspace coder` |
-| `agent repair-workspace <id>` | Repair missing workspace files | `pocketstudio agent repair-workspace coder` |
-| `agent reset <id>` | Reset agent runtime conversation | `pocketstudio agent reset coder` |
-| `agent remove <id>` | Remove an agent | `pocketstudio agent remove coder` |
-
-### Team Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `team list` | List teams | `pocketstudio team list` |
-| `team add` | Add or update a team | `pocketstudio team add dev --name "Dev Team" --agent coder --leader coder` |
-| `team show <id>` | Show team configuration | `pocketstudio team show dev` |
-| `team add-member <team> <agent>` | Add an agent to a team | `pocketstudio team add-member dev reviewer` |
-| `team remove-member <team> <agent>` | Remove an agent from a team | `pocketstudio team remove-member dev reviewer` |
-| `team set-leader <team> <agent>` | Set team leader | `pocketstudio team set-leader dev coder` |
-| `team remove <id>` | Remove a team | `pocketstudio team remove dev` |
-
-Team settings also include workflow mode. In workflow mode, a team can run a LangGraph-backed graph instead of only sequential `chain` or parallel `fanout` execution.
-
-![Team workflow settings](docs/assets/TeamSetting.png)
-
-### Chatroom Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `chatroom <team>` | Watch a team chatroom | `pocketstudio chatroom dev` |
-| `chatroom <team> --send` | Post a chatroom message | `pocketstudio chatroom dev --send "hello team"` |
-| `visualize --team <id>` | Watch team runtime state | `pocketstudio visualize --team dev` |
-
-Every team has a persistent chat room. Agents post to it using `[#team_id: message]` tags, and messages are broadcast to teammates.
-
-API endpoints:
-
-```text
-GET  /api/chatroom/{teamId}
-POST /api/chatroom/{teamId}
-POST /api/teams/{teamId}/dispatch
-```
-
-### Provider and Custom Provider Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `provider list` | List available providers | `pocketstudio provider list` |
-| `provider custom` | List custom providers | `pocketstudio provider custom` |
-| `provider save` | Create or update a custom provider | `pocketstudio provider save codex-fast --name "Codex Fast" --harness codex --model gpt-5.4-mini` |
-| `provider remove <id>` | Remove a custom provider | `pocketstudio provider remove codex-fast` |
-| `process list` | List active provider processes | `pocketstudio process list` |
-| `process kill <agent>` | Kill an agent process | `pocketstudio process kill coder` |
-
-Custom provider example:
-
-```powershell
-pocketstudio provider save local-openai `
-  --name "Local OpenAI Compatible" `
-  --harness openai `
-  --base-url "http://127.0.0.1:8000/v1" `
-  --api-key "sk-local" `
-  --model "gpt-4o-mini"
-```
-
-### Pairing Commands
-
-Use sender pairing to control which external senders may message agents.
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `pairing list` | Show pending and approved senders | `pocketstudio pairing list` |
-| `pairing approve <code>` | Approve a sender by code | `pocketstudio pairing approve ABC123` |
-| `pairing revoke <channel> <sender>` | Remove a sender | `pocketstudio pairing revoke telegram 1234567` |
-
-### Messaging and In-Chat Routing
-
-```powershell
-pocketstudio send "Hello"
-pocketstudio send "@agent:coder fix the queue issue"
-pocketstudio send "@team:dev plan the refactor"
-```
-
-Agents can route work to teammates or chat rooms in their responses:
-
-```text
-[@coder: implement the API]
-[@coder,reviewer: inspect queue handling]
-[#dev: post this to the team chatroom]
-```
-
-### Queue, Worker, Schedule, and Heartbeat Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `queue status` | Show queue counts | `pocketstudio queue status` |
-| `queue diagnostics` | Inspect queue health | `pocketstudio queue diagnostics` |
-| `queue dead` | List dead messages | `pocketstudio queue dead` |
-| `queue retry <id>` | Retry a failed/dead message | `pocketstudio queue retry 12` |
-| `worker status` | Show worker state | `pocketstudio worker status` |
-| `worker start` | Start background worker | `pocketstudio worker start` |
-| `worker pause` | Pause background worker | `pocketstudio worker pause` |
-| `worker resume` | Resume background worker | `pocketstudio worker resume` |
-| `worker maintenance` | Run maintenance tasks | `pocketstudio worker maintenance` |
-| `schedule list` | List schedules | `pocketstudio schedule list` |
-| `schedule add` | Add recurring or one-time work | `pocketstudio schedule add --agent coder --message "Daily check" --cron "0 9 * * *"` |
-| `heartbeat status` | Show heartbeat state | `pocketstudio heartbeat status` |
-| `heartbeat tick` | Force heartbeat processing | `pocketstudio heartbeat tick --agent coder --force` |
-
-### Project and Task Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `project list` | List projects | `pocketstudio project list` |
-| `project add` | Create a project | `pocketstudio project add Platform --description "Backend work" --prefix PLAT` |
-| `project workspace <id>` | Show project workspace | `pocketstudio project workspace PROJECT_ID` |
-| `task list` | List tasks | `pocketstudio task list` |
-| `task add` | Create a task | `pocketstudio task add "Wire backend" --assignee coder --assignee-type agent` |
-| `task update` | Update task fields | `pocketstudio task update 123 --status in_progress` |
-| `task comment` | Add task comment | `pocketstudio task comment 123 "Implemented and tested"` |
-| `task reorder` | Reorder a status column | `pocketstudio task reorder todo 3 7 9` |
-
-### Settings Commands
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `settings get` | Show settings | `pocketstudio settings get` |
-| `settings backup` | Create settings backup | `pocketstudio settings backup` |
-| `settings export <path>` | Export settings | `pocketstudio settings export .pocketStudio\settings-export.json` |
-| `settings import <path>` | Import settings | `pocketstudio settings import .pocketStudio\settings-export.json` |
-| `settings validate <path>` | Validate settings JSON | `pocketstudio settings validate .pocketStudio\settings.json` |
-| `settings preview <path>` | Preview import changes | `pocketstudio settings preview .pocketStudio\settings.json` |
 
 ## Using Agents
 
@@ -474,14 +314,6 @@ Representative structure:
 }
 ```
 
-Useful environment variables:
-
-```powershell
-$env:POCKETSTUDIO_POCKETSTUDIO_HOME="D:\path\to\runtime"
-$env:POCKETSTUDIO_SQLITE_JOURNAL_MODE="WAL"
-$env:POCKETSTUDIO_WORKER_ENABLED="true"
-```
-
 ### Heartbeat Configuration
 
 Edit an agent heartbeat prompt:
@@ -560,7 +392,7 @@ pocketstudio project add Website --description "Landing page refresh" --prefix W
 pocketstudio task add "Review hero copy" --project PROJECT_ID --assignee writer --assignee-type agent
 pocketstudio send "@team:dev Work on PROJECT_ID tasks"
 ```
-
+![Project view](docs/assets/project.png)
 ![Completed work view](docs/assets/Done.png)
 
 ## Documentation
@@ -643,6 +475,3 @@ http://127.0.0.1:3777/api/events/stream
 
 MIT
 
----
-
-pocketStudio: a local, service-oriented runtime for collaborative AI agents.
