@@ -1370,6 +1370,11 @@ Domain service layer for agents, teams, queues, projects, tasks, schedules, and 
 | Function | Usage |
 |---|---|
 | `merge_dicts(left: dict[str, Any], right: dict[str, Any])` | Module-level helper. Review callers and tests before changing behavior. |
+| `merge_workflow_memory(left: dict[str, Any], right: dict[str, Any])` | Module-level helper. Review callers and tests before changing behavior. |
+
+#### `WorkflowMemoryState(TypedDict)`
+
+Class, data model, service object, or exception type.
 
 #### `WorkflowState(TypedDict)`
 
@@ -1397,9 +1402,13 @@ Class, data model, service object, or exception type.
 | `terminal_nodes(definition: WorkflowDefinition)` | Helper method for its service or type. |
 | `_topological_order(definition: WorkflowDefinition)` | Helper method for its service or type. |
 | `async run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow: TeamWorkflow, *, run_agent: Callable[..., Awaitable[AgentRun]], queue: QueueService, chat: ChatService, events: EventService, project_workspace_for_message: Callable[[QueueMessage], Path \| None])` | Runs a provider, orchestration flow, event handler, or external message handler. |
-| `workflow_node_input(team: Team, workflow_id: str, original_request: str, node, node_name: str, predecessor_ids: list[str], outputs: dict[str, str])` | Helper method for its service or type. |
+| `workflow_node_input(team: Team, workflow_id: str, original_request: str, memory: WorkflowMemoryState, node, node_name: str, predecessor_ids: list[str], outputs: dict[str, str])` | Helper method for its service or type. |
 | `format_workflow_predecessors(cls, predecessor_ids: list[str], outputs: dict[str, str])` | Converts, parses, or formats internal data. |
 | `summarize_workflow_output(text: str, max_length: int=240)` | Helper method for its service or type. |
+| `format_recent_workflow_outputs(recent_outputs: list[dict[str, str]])` | Converts, parses, or formats internal data. |
+| `_initial_workflow_memory()` | Helper method for its service or type. |
+| `_workflow_memory_after_run(self, memory: WorkflowMemoryState, node_id: str, output: str)` | Helper method for its service or type. |
+| `_compact_workflow_memory(self, memory: WorkflowMemoryState)` | Helper method for its service or type. |
 | `_langchain_runnable_for_agent(agent: Agent, run_agent: Callable[..., Awaitable[AgentRun]])` | Helper method for its service or type. |
 | `_build_langgraph_workflow(self, *, team: Team, workflow_id: str, message: QueueMessage, agents: list[Agent], node_by_id: dict[str, Any], agent_by_id: dict[str, Agent], predecessors: dict[str, list[str]], outgoing: dict[str, list[str]], edge_pairs: list[tuple[str, str]], conditional_edges: list[Any], entrypoint: str, run_agent: Callable[..., Awaitable[AgentRun]], queue: QueueService, events: EventService, project_workspace_for_message: Callable[[QueueMessage], Path \| None])` | Helper method for its service or type. |
 | `compile_workflow_routing_function(node)` | Helper method for its service or type. |

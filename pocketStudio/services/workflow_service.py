@@ -14,13 +14,27 @@ from pocketStudio.services.event_service import EventService
 from pocketStudio.services.queue_service import QueueService
 from pocketStudio.services.team_service import TeamService
 
-_WORKFLOW_FULL_CONTEXT_LIMIT = 5
+_WORKFLOW_SUMMARY_COMPACT_EVERY = 5
+_WORKFLOW_RUNNING_SUMMARY_LIMIT = 1000
+
+
 def merge_dicts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     return {**left, **right}
 
 
+def merge_workflow_memory(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    return right
+
+
+class WorkflowMemoryState(TypedDict):
+    running_summary: str
+    recent_outputs: list[dict[str, str]]
+    nodes_since_compaction: int
+
+
 class WorkflowState(TypedDict):
     original_request: str
+    memory: Annotated[WorkflowMemoryState, merge_workflow_memory]
     outputs: Annotated[dict[str, str], merge_dicts]
     runs_by_node: Annotated[dict[str, AgentRun], merge_dicts]
     runs: Annotated[list[AgentRun], operator.add]
@@ -273,7 +287,14 @@ class WorkflowService:
             project_workspace_for_message=project_workspace_for_message,
         )
         state = await compiled_graph.ainvoke(
-            {"original_request": message.content, "outputs": {}, "runs_by_node": {}, "runs": [], "run_order": []},
+            {
+                "original_request": message.content,
+                "memory": self._initial_workflow_memory(),
+                "outputs": {},
+                "runs_by_node": {},
+                "runs": [],
+                "run_order": [],
+            },
             {"recursion_limit": 50},
         )
         runs = state.get("runs", [])
@@ -296,12 +317,14 @@ class WorkflowService:
         team: Team,
         workflow_id: str,
         original_request: str,
+        memory: WorkflowMemoryState,
         node,
         node_name: str,
         predecessor_ids: list[str],
         outputs: dict[str, str],
     ) -> str:
-        predecessor_text = WorkflowService.format_workflow_predecessors(predecessor_ids, outputs)
+        lastNode_output = WorkflowService.format_workflow_predecessors(predecessor_ids, outputs)
+        recent_text = WorkflowService.format_recent_workflow_outputs(memory["recent_outputs"])
         if node.input_template:
             try:
                 return node.input_template.format(
@@ -310,17 +333,24 @@ class WorkflowService:
                     node_name=node_name,
                     agent_id=node.agent_id,
                     message=original_request,
-                    predecessor_outputs=predecessor_text,
+                    running_summary=memory["running_summary"],
+                    recent_outputs=recent_text,
+                    direct_predecessor_outputs=lastNode_output,
+                    predecessor_outputs=lastNode_output,
                 )
             except KeyError as exc:
                 raise ValueError(f"Workflow node '{node.id}' inputTemplate references unknown field: {exc}") from exc
         chunks = [f"Team #{team.id} workflow '{workflow_id}' request:\n{original_request}"]
+        if memory["running_summary"].strip():
+            chunks.append(f"Running summary:\n{memory['running_summary'].strip()}")
+        if recent_text:
+            chunks.append(f"Last node outputs:\n{lastNode_output}")
         if node_name:
-            chunks.append(f"Workflow node:\n{node_name}")
+            chunks.append(f"Your are:\n{node_name}")
         if node.prompt:
-            chunks.append(f"Node instruction:\n{node.prompt}")
-        if predecessor_text:
-            chunks.append(f"Upstream results:\n{predecessor_text}")
+            chunks.append(f"Your Need to:\n{node.prompt}")
+        # if predecessor_text:
+        #     chunks.append(f"Upstream results:\n{predecessor_text}")
         return "\n\n------\n\n".join(chunks)
 
     @classmethod
@@ -328,23 +358,11 @@ class WorkflowService:
         if not predecessor_ids:
             return ""
 
-        recent_ids = predecessor_ids[-_WORKFLOW_FULL_CONTEXT_LIMIT:]
-        older_ids = predecessor_ids[:-_WORKFLOW_FULL_CONTEXT_LIMIT]
-
         chunks: list[str] = []
-        for predecessor_id in recent_ids:
+        for predecessor_id in predecessor_ids:
             if predecessor_id not in outputs:
                 continue
             chunks.append(f"## {predecessor_id}\n{outputs[predecessor_id]}")
-
-        if older_ids:
-            summarized = []
-            for predecessor_id in older_ids:
-                if predecessor_id not in outputs:
-                    continue
-                summarized.append(f"- {predecessor_id}: {cls.summarize_workflow_output(outputs[predecessor_id])}")
-            if summarized:
-                chunks.append("## Earlier upstream summary\n" + "\n".join(summarized))
 
         return "\n\n".join(chunks)
 
@@ -359,6 +377,48 @@ class WorkflowService:
         if len(cleaned) <= max_length:
             return cleaned
         return f"{cleaned[: max_length - 1].rstrip()}..."
+
+    @staticmethod
+    def format_recent_workflow_outputs(recent_outputs: list[dict[str, str]]) -> str:
+        if not recent_outputs:
+            return ""
+        return "\n\n".join(f"## node '{item['node_id']}' response: \n{item['output']}" for item in recent_outputs)
+
+    @staticmethod
+    def _initial_workflow_memory() -> WorkflowMemoryState:
+        return {"running_summary": "", "recent_outputs": [], "nodes_since_compaction": 0}
+
+    def _workflow_memory_after_run(self, memory: WorkflowMemoryState, node_id: str, output: str) -> WorkflowMemoryState:
+        updated: WorkflowMemoryState = {
+            "running_summary": memory["running_summary"],
+            "recent_outputs": [*memory["recent_outputs"], {"node_id": node_id, "output": output}],
+            "nodes_since_compaction": memory["nodes_since_compaction"] + 1,
+        }
+        if updated["nodes_since_compaction"] < _WORKFLOW_SUMMARY_COMPACT_EVERY:
+            return updated
+        return self._compact_workflow_memory(updated)
+
+    def _compact_workflow_memory(self, memory: WorkflowMemoryState) -> WorkflowMemoryState:
+        recent_text = self.format_recent_workflow_outputs(memory["recent_outputs"]).strip()
+        if recent_text:
+            chunk = self.summarize_workflow_output(recent_text, max_length=_WORKFLOW_RUNNING_SUMMARY_LIMIT)
+            running_summary = memory["running_summary"].strip()
+            merged = "\n\n".join(part for part in [running_summary, chunk] if part).strip()
+            memory = {
+                "running_summary": self.summarize_workflow_output(
+                    merged,
+                    max_length=_WORKFLOW_RUNNING_SUMMARY_LIMIT,
+                ),
+                "recent_outputs": [],
+                "nodes_since_compaction": 0,
+            }
+        else:
+            memory = {
+                "running_summary": memory["running_summary"],
+                "recent_outputs": [],
+                "nodes_since_compaction": 0,
+            }
+        return memory
 
     @staticmethod
     def _langchain_runnable_for_agent(agent: Agent, run_agent: Callable[..., Awaitable[AgentRun]]):
@@ -413,6 +473,7 @@ class WorkflowService:
             runnable = self._langchain_runnable_for_agent(agent, run_agent) if agent is not None else None
 
             async def run_node(state: WorkflowState, *, node=node, agent=agent, runnable=runnable) -> dict:
+                memory = state["memory"]
                 if agent is not None:
                     node_name = agent.name
                 elif node.type == "start":
@@ -427,6 +488,7 @@ class WorkflowService:
                     team,
                     workflow_id,
                     state["original_request"],
+                    memory,
                     node,
                     node_name,
                     predecessors[node.id],
@@ -452,7 +514,9 @@ class WorkflowService:
                 else:
                     output = node.prompt or (context[-1] if context else state["original_request"])
                     run = AgentRun(agent_id=node.id, input=input_text, output=output)
+                next_memory = self._workflow_memory_after_run(memory, node.id, run.output)
                 return {
+                    "memory": next_memory,
                     "outputs": {node.id: run.output},
                     "runs_by_node": {node.id: run},
                     "runs": [run],
