@@ -116,6 +116,18 @@ class WorkflowRecordingProvider(AgentProvider):
         return ProviderResponse(text=f"{request.agent.id} handled:\n{request.input}")
 
 
+class CompactingWorkflowProvider(AgentProvider):
+    name = "workflow-compacting"
+
+    def __init__(self) -> None:
+        self.inputs: list[tuple[str, str]] = []
+
+    async def run(self, request: ProviderRequest) -> ProviderResponse:
+        self.inputs.append((request.agent.id, request.input))
+        output = (f"{request.agent.id} output " + ("context " * 24)).strip()
+        return ProviderResponse(text=output)
+
+
 class ConditionalWorkflowProvider(AgentProvider):
     name = "conditional-workflow"
 
@@ -775,7 +787,11 @@ def test_active_team_workflow_controls_agent_order_and_inputs() -> None:
                     "outputNode": "build",
                     "nodes": [
                         {"id": "plan", "agentId": "planner", "prompt": "Create a short plan"},
-                        {"id": "build", "agentId": "coder", "inputTemplate": "{message}\n\nUpstream:\n{predecessor_outputs}"},
+                        {
+                            "id": "build",
+                            "agentId": "coder",
+                            "inputTemplate": "{message}\n\nUpstream:\n{direct_predecessor_outputs}",
+                        },
                     ],
                     "edges": [{"source": "plan", "target": "build"}],
                 },
@@ -1106,6 +1122,58 @@ def test_team_workflow_runs_start_tool_and_end_nodes() -> None:
 
         assert [run.agent_id for run in result.runs] == ["start", "tool", "end"]
         assert result.output == "tool result"
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_team_workflow_compacts_history_into_running_summary() -> None:
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        events = EventService(db)
+        teams = TeamService(db)
+        workflows = WorkflowService(db, teams)
+        registry = ProviderRegistry()
+        provider = CompactingWorkflowProvider()
+        registry.register(provider)
+        orchestrator = Orchestrator(
+            agents=AgentService(db, settings),
+            teams=teams,
+            queue=QueueService(db, events, settings),
+            chat=ChatService(db, events),
+            events=events,
+            providers=registry,
+            workflows=workflows,
+        )
+        node_ids = [f"node{i}" for i in range(1, 7)]
+        for node_id in node_ids:
+            orchestrator.agents.create(
+                AgentCreate(id=node_id, name=node_id.title(), role="Works", provider="workflow-compacting")
+            )
+        orchestrator.teams.create(TeamCreate(id="dev", name="Dev", mode=TeamMode.workflow, agent_ids=node_ids))
+        workflows.create(
+            "dev",
+            TeamWorkflowCreate(
+                id="summary-flow",
+                name="Summary Flow",
+                definition={
+                    "entrypoint": "node1",
+                    "outputNode": "node6",
+                    "nodes": [{"id": node_id, "agentId": node_id} for node_id in node_ids],
+                    "edges": [{"source": node_ids[i], "target": node_ids[i + 1]} for i in range(len(node_ids) - 1)],
+                },
+            ),
+        )
+
+        message = orchestrator.enqueue(MessageCreate(target="@team:dev", content="Compress workflow history"))
+        result = asyncio.run(orchestrator.process_message(message.id))
+
+        assert [run.agent_id for run in result.runs] == node_ids
+        assert "Recent workflow outputs:" in provider.inputs[4][1]
+        assert "Running summary:" in provider.inputs[5][1]
+        assert "Recent workflow outputs:" not in provider.inputs[5][1]
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
