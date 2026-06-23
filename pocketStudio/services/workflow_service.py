@@ -443,24 +443,24 @@ class WorkflowService:
             "POCKETSTUDIO_WORKFLOW_SUMMARY_MODEL",
             "OPENAI_MODEL",
         )
-        base_url = self._build_in_model_setting(
-            "POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL",
-            "POCKETSTUDIO_WORKFLOW_SUMMARY_BASE_URL",
-            "https://generativelanguage.googleapis.com/v1beta/openai/",
+        model_provider = self._build_in_model_setting(
+            "POCKETSTUDIO_BUILD_IN_MODEL_MODEL_PROVIDER",
+            "POCKETSTUDIO_WORKFLOW_SUMMARY_MODEL_PROVIDER",
+            "google_genai",
         )
         api_key = self._build_in_model_setting(
             "POCKETSTUDIO_BUILD_IN_MODEL_API_KEY",
             "POCKETSTUDIO_WORKFLOW_SUMMARY_API_KEY",
             "OPENAI_API_KEY",
         )
-        if not model_name or not base_url:
+        if not model_name:
             return None
 
         model_identifier = model_name
         try:
             model = init_chat_model(
                 model_identifier,
-                model_provider="google_genai",
+                model_provider=model_provider,
                 temperature=self._build_in_model_number(
                     "POCKETSTUDIO_BUILD_IN_MODEL_TEMPERATURE",
                     "POCKETSTUDIO_WORKFLOW_SUMMARY_TEMPERATURE",
@@ -478,7 +478,7 @@ class WorkflowService:
                     "POCKETSTUDIO_WORKFLOW_SUMMARY_TIMEOUT_SECONDS",
                     60.0,
                 )),
-                api_key=api_key
+                api_key=api_key,
             )
         except ImportError:
             return None

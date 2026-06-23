@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     heartbeat_enabled: bool = True
     heartbeat_interval_seconds: int = 3600
     build_in_model_model: str = ""
-    build_in_model_base_url: str = ""
+    build_in_model_model_provider: str = "google_genai"
     build_in_model_api_key: str = ""
     build_in_model_temperature: float = 0.2
     build_in_model_max_tokens: int = 256

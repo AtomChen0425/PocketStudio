@@ -153,7 +153,7 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               <DetailItem label="Model" value={settings.build_in_model?.model || "Not configured"} />
-              <DetailItem label="Base URL" value={settings.build_in_model?.base_url || "Not configured"} />
+              <DetailItem label="Provider" value={settings.build_in_model?.model_provider || "google_genai"} />
               <DetailItem label="Temperature" value={formatNumber(settings.build_in_model?.temperature, "0.2")} />
               <DetailItem label="Max tokens" value={formatNumber(settings.build_in_model?.max_tokens, "256")} />
               <DetailItem label="Timeout" value={formatSeconds(settings.build_in_model?.timeout_seconds, "60s")} />

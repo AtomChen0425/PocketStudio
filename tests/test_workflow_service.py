@@ -190,7 +190,7 @@ def test_workflow_service_summarizes_output_with_langchain_model(monkeypatch: py
         return FakeListChatModel(responses=["durable summary"])
 
     monkeypatch.setenv("POCKETSTUDIO_BUILD_IN_MODEL_MODEL", "gpt-test")
-    monkeypatch.setenv("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("POCKETSTUDIO_BUILD_IN_MODEL_MODEL_PROVIDER", "google_genai")
     monkeypatch.setenv("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY", "secret")
     monkeypatch.setattr(workflow_service_module, "init_chat_model", fake_init_chat_model, raising=True)
 
@@ -200,8 +200,8 @@ def test_workflow_service_summarizes_output_with_langchain_model(monkeypatch: py
         summary = workflows.summarize_workflow_output("first line\nsecond line", max_length=80)
 
         assert summary == "durable summary"
-        assert captured["model"] == "openai:gpt-test"
-        assert captured["kwargs"]["base_url"] == "https://example.invalid/v1"
+        assert captured["model"] == "gpt-test"
+        assert captured["model_provider"] == "google_genai"
         assert captured["kwargs"]["api_key"] == "secret"
         assert captured["kwargs"]["temperature"] == 0.2
         assert captured["kwargs"]["max_tokens"] == 256
@@ -222,7 +222,7 @@ def test_workflow_service_uses_build_in_model_settings_snapshot(monkeypatch: pyt
         return FakeListChatModel(responses=["snapshot summary"])
 
     monkeypatch.delenv("POCKETSTUDIO_BUILD_IN_MODEL_MODEL", raising=False)
-    monkeypatch.delenv("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL", raising=False)
+    monkeypatch.delenv("POCKETSTUDIO_BUILD_IN_MODEL_MODEL_PROVIDER", raising=False)
     monkeypatch.delenv("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY", raising=False)
     monkeypatch.setattr(workflow_service_module, "init_chat_model", fake_init_chat_model, raising=True)
 
@@ -237,7 +237,7 @@ def test_workflow_service_uses_build_in_model_settings_snapshot(monkeypatch: pyt
             {
                 "build_in_model": {
                     "model": "gpt-snapshot",
-                    "base_url": "https://example.invalid/v1",
+                    "model_provider": "google_genai",
                     "api_key": "secret",
                 }
             }
@@ -247,7 +247,7 @@ def test_workflow_service_uses_build_in_model_settings_snapshot(monkeypatch: pyt
         summary = workflows.summarize_workflow_output("alpha\nbeta", max_length=80)
 
         assert summary == "snapshot summary"
-        assert captured["model"] == "openai:gpt-snapshot"
-        assert captured["kwargs"]["base_url"] == "https://example.invalid/v1"
+        assert captured["model"] == "gpt-snapshot"
+        assert captured["model_provider"] == "google_genai"
     finally:
         shutil.rmtree(home, ignore_errors=True)

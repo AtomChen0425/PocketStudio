@@ -716,13 +716,13 @@ function BuiltinProviders() {
   );
 }
 
-// 鈹€鈹€ Built-in Model 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// Built-in Model 
 
 function BuiltInModelSection() {
   const { data: settings, refresh } = usePolling(getSettings, 0);
   const [editing, setEditing] = useState(false);
   const [model, setModel] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  const [modelProvider, setModelProvider] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [temperature, setTemperature] = useState("0.2");
   const [maxTokens, setMaxTokens] = useState("256");
@@ -732,14 +732,14 @@ function BuiltInModelSection() {
   useEffect(() => {
     const config = settings?.build_in_model;
     setModel(config?.model ?? "");
-    setBaseUrl(config?.base_url ?? "");
+    setModelProvider(config?.model_provider ?? "google_genai");
     setApiKey(config?.api_key ?? "");
     setTemperature(String(config?.temperature ?? 0.2));
     setMaxTokens(String(config?.max_tokens ?? 256));
     setTimeoutSeconds(String(config?.timeout_seconds ?? 60));
   }, [settings]);
 
-  const hasConfig = !!(settings?.build_in_model?.model || settings?.build_in_model?.base_url || settings?.build_in_model?.api_key);
+  const hasConfig = !!(settings?.build_in_model?.model || settings?.build_in_model?.model_provider || settings?.build_in_model?.api_key);
 
   const handleSave = async () => {
     const nextTemperature = Number(temperature);
@@ -749,15 +749,15 @@ function BuiltInModelSection() {
 
     setSaving(true);
     await updateSettings({
-      build_in_model: {
-        ...settings?.build_in_model,
-        model: model.trim(),
-        base_url: baseUrl.trim(),
-        api_key: apiKey,
-        temperature: nextTemperature,
-        max_tokens: Math.max(1, Math.floor(nextMaxTokens)),
-        timeout_seconds: Math.max(1, nextTimeout),
-      },
+        build_in_model: {
+          ...settings?.build_in_model,
+          model: model.trim(),
+          model_provider: modelProvider.trim() || "google_genai",
+          api_key: apiKey,
+          temperature: nextTemperature,
+          max_tokens: Math.max(1, Math.floor(nextMaxTokens)),
+          timeout_seconds: Math.max(1, nextTimeout),
+        },
     });
     setSaving(false);
     setEditing(false);
@@ -794,8 +794,8 @@ function BuiltInModelSection() {
             <span className="font-medium truncate">{settings?.build_in_model?.model || "Not configured"}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
-            <span className="text-muted-foreground">Base URL</span>
-            <span className="font-medium truncate">{settings?.build_in_model?.base_url || "Not configured"}</span>
+            <span className="text-muted-foreground">Provider</span>
+            <span className="font-medium truncate">{settings?.build_in_model?.model_provider || "google_genai"}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-muted-foreground">Temperature</span>
@@ -806,7 +806,7 @@ function BuiltInModelSection() {
           <div className="px-4 py-4 space-y-3">
             <div className="grid gap-3 md:grid-cols-2">
               <Field label="Model" value={model} onChange={setModel} placeholder="gpt-4o-mini" />
-              <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} placeholder="https://api.openai.com/v1" />
+              <Field label="Model Provider" value={modelProvider} onChange={setModelProvider} placeholder="google_genai" />
               <Field label="Temperature" value={temperature} onChange={setTemperature} placeholder="0.2" inputMode="decimal" />
               <Field label="Max tokens" value={maxTokens} onChange={setMaxTokens} placeholder="256" inputMode="numeric" />
               <Field label="Timeout (s)" value={timeoutSeconds} onChange={setTimeoutSeconds} placeholder="60" inputMode="decimal" />

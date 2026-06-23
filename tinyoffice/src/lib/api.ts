@@ -154,7 +154,7 @@ export interface Settings {
   };
   build_in_model?: {
     model?: string;
-    base_url?: string;
+    model_provider?: string;
     api_key?: string;
     temperature?: number;
     max_tokens?: number;

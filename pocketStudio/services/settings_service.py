@@ -17,7 +17,7 @@ DEFAULT_SETTINGS = {
     "models": {"provider": "local", "openai": {"model": "gpt-4o-mini"}},
     "build_in_model": {
         "model": "",
-        "base_url": "",
+        "model_provider": "google_genai",
         "api_key": "",
         "temperature": 0.2,
         "max_tokens": 256,
@@ -108,8 +108,8 @@ class SettingsService:
         build_in_model = payload.get("build_in_model") or {}
         if "model" in build_in_model and not isinstance(build_in_model["model"], str):
             raise SettingsValidationError("build_in_model.model must be a string")
-        if "base_url" in build_in_model and not isinstance(build_in_model["base_url"], str):
-            raise SettingsValidationError("build_in_model.base_url must be a string")
+        if "model_provider" in build_in_model and not isinstance(build_in_model["model_provider"], str):
+            raise SettingsValidationError("build_in_model.model_provider must be a string")
         if "api_key" in build_in_model and not isinstance(build_in_model["api_key"], str):
             raise SettingsValidationError("build_in_model.api_key must be a string")
         if "temperature" in build_in_model:
@@ -291,12 +291,12 @@ class SettingsService:
 
         result: dict[str, Any] = {}
         model = read("POCKETSTUDIO_BUILD_IN_MODEL_MODEL")
-        base_url = read("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL")
+        model_provider = read("POCKETSTUDIO_BUILD_IN_MODEL_MODEL_PROVIDER") or "google_genai"
         api_key = read("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY")
         if model:
             result["model"] = model
-        if base_url:
-            result["base_url"] = base_url
+        if model_provider:
+            result["model_provider"] = model_provider
         if api_key:
             result["api_key"] = api_key
         temperature = read_number("POCKETSTUDIO_BUILD_IN_MODEL_TEMPERATURE")
@@ -314,7 +314,7 @@ class SettingsService:
     def _sync_build_in_model_env(build_in_model: dict[str, Any]) -> None:
         mapping = {
             "model": ("POCKETSTUDIO_BUILD_IN_MODEL_MODEL", "POCKETSTUDIO_WORKFLOW_SUMMARY_MODEL"),
-            "base_url": ("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL", "POCKETSTUDIO_WORKFLOW_SUMMARY_BASE_URL"),
+            "model_provider": ("POCKETSTUDIO_BUILD_IN_MODEL_MODEL_PROVIDER", "POCKETSTUDIO_WORKFLOW_SUMMARY_MODEL_PROVIDER"),
             "api_key": ("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY", "POCKETSTUDIO_WORKFLOW_SUMMARY_API_KEY"),
             "temperature": ("POCKETSTUDIO_BUILD_IN_MODEL_TEMPERATURE", "POCKETSTUDIO_WORKFLOW_SUMMARY_TEMPERATURE"),
             "max_tokens": ("POCKETSTUDIO_BUILD_IN_MODEL_MAX_TOKENS", "POCKETSTUDIO_WORKFLOW_SUMMARY_MAX_TOKENS"),
