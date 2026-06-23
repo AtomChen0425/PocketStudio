@@ -1263,6 +1263,8 @@ Class, data model, service object, or exception type.
 | `_normalize_paths(cls, payload: dict[str, Any])` | Converts, parses, or formats internal data. |
 | `_expand_home_path(value: str)` | Helper method for its service or type. |
 | `_known_sections(settings: dict[str, Any])` | Helper method for its service or type. |
+| `_build_in_model_env_settings()` | Helper method for its service or type. |
+| `_sync_build_in_model_env(build_in_model: dict[str, Any])` | Helper method for its service or type. |
 | `_diff(cls, current: Any, next_value: Any, prefix: str='')` | Helper method for its service or type. |
 | `_repair_json(raw: str)` | Validates input or repairs required runtime state. |
 
@@ -1386,7 +1388,7 @@ Class, data model, service object, or exception type.
 
 | Method | Usage |
 |---|---|
-| `__init__(self, db: Database, teams: TeamService)` | Python object lifecycle or protocol method. |
+| `__init__(self, db: Database, teams: TeamService, settings_service: SettingsService \| None=None)` | Python object lifecycle or protocol method. |
 | `create(self, team_id: str, payload: TeamWorkflowCreate)` | Creates a resource, installs content, or adds a relationship. |
 | `list(self, team_id: str)` | Lists resources or query results. |
 | `get(self, team_id: str, workflow_id: str)` | Reads one resource, status object, or derived view. |
@@ -1404,11 +1406,15 @@ Class, data model, service object, or exception type.
 | `async run_workflow(self, message: QueueMessage, team: Team, agents: list[Agent], workflow: TeamWorkflow, *, run_agent: Callable[..., Awaitable[AgentRun]], queue: QueueService, chat: ChatService, events: EventService, project_workspace_for_message: Callable[[QueueMessage], Path \| None])` | Runs a provider, orchestration flow, event handler, or external message handler. |
 | `workflow_node_input(team: Team, workflow_id: str, original_request: str, memory: WorkflowMemoryState, node, node_name: str, predecessor_ids: list[str], outputs: dict[str, str])` | Helper method for its service or type. |
 | `format_workflow_predecessors(cls, predecessor_ids: list[str], outputs: dict[str, str])` | Converts, parses, or formats internal data. |
-| `summarize_workflow_output(text: str, max_length: int=240)` | Helper method for its service or type. |
+| `summarize_workflow_output(self, text: str, max_length: int=240)` | Helper method for its service or type. |
 | `format_recent_workflow_outputs(recent_outputs: list[dict[str, str]])` | Converts, parses, or formats internal data. |
 | `_initial_workflow_memory()` | Helper method for its service or type. |
 | `_workflow_memory_after_run(self, memory: WorkflowMemoryState, node_id: str, output: str)` | Helper method for its service or type. |
 | `_compact_workflow_memory(self, memory: WorkflowMemoryState)` | Helper method for its service or type. |
+| `_get_workflow_summary_chain(self)` | Reads one resource, status object, or derived view. |
+| `_build_in_model_setting(env_name: str, legacy_env_name: str, default: str='')` | Helper method for its service or type. |
+| `_build_in_model_number(env_name: str, legacy_env_name: str, default: float)` | Helper method for its service or type. |
+| `_normalize_summary_text(text: str, max_length: int)` | Converts, parses, or formats internal data. |
 | `_langchain_runnable_for_agent(agent: Agent, run_agent: Callable[..., Awaitable[AgentRun]])` | Helper method for its service or type. |
 | `_build_langgraph_workflow(self, *, team: Team, workflow_id: str, message: QueueMessage, agents: list[Agent], node_by_id: dict[str, Any], agent_by_id: dict[str, Agent], predecessors: dict[str, list[str]], outgoing: dict[str, list[str]], edge_pairs: list[tuple[str, str]], conditional_edges: list[Any], entrypoint: str, run_agent: Callable[..., Awaitable[AgentRun]], queue: QueueService, events: EventService, project_workspace_for_message: Callable[[QueueMessage], Path \| None])` | Helper method for its service or type. |
 | `compile_workflow_routing_function(node)` | Helper method for its service or type. |

@@ -15,6 +15,14 @@ DEFAULT_SETTINGS = {
     "workspace": {"name": "pocketStudio", "path": ".pocketStudio/workspace"},
     "channels": {"enabled": ["web"]},
     "models": {"provider": "local", "openai": {"model": "gpt-4o-mini"}},
+    "build_in_model": {
+        "model": "",
+        "base_url": "",
+        "api_key": "",
+        "temperature": 0.2,
+        "max_tokens": 256,
+        "timeout_seconds": 60.0,
+    },
     "monitoring": {"heartbeat_interval": 3600},
 }
 
@@ -27,11 +35,13 @@ class SettingsService:
     def __init__(self, db: Database, settings: Settings) -> None:
         self.db = db
         self.settings = settings
+        self._sync_build_in_model_env(self.snapshot().get("build_in_model") or {})
 
     def snapshot(self) -> dict[str, Any]:
         result = json.loads(json.dumps(DEFAULT_SETTINGS))
         result = self._merge(result, self._legacy_db_settings())
         result = self._merge(result, self._file_settings())
+        result = self._merge(result, self._build_in_model_env_settings())
         return result
 
     def update(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -57,13 +67,14 @@ class SettingsService:
     def validate(self, payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
             raise SettingsValidationError("settings payload must be an object")
-        allowed = {"workspace", "channels", "models", "monitoring", "agents", "teams"}
+        allowed = {"workspace", "channels", "models", "build_in_model", "monitoring", "agents", "teams"}
         unknown = sorted(set(payload) - allowed)
         if unknown:
             raise SettingsValidationError(f"unknown settings section(s): {', '.join(unknown)}")
         self._validate_object(payload, "workspace")
         self._validate_object(payload, "channels")
         self._validate_object(payload, "models")
+        self._validate_object(payload, "build_in_model")
         self._validate_object(payload, "monitoring")
         self._validate_mapping(payload, "agents")
         self._validate_mapping(payload, "teams")
@@ -94,6 +105,26 @@ class SettingsService:
         if "custom_providers" in models and not isinstance(models["custom_providers"], dict):
             raise SettingsValidationError("models.custom_providers must be an object")
 
+        build_in_model = payload.get("build_in_model") or {}
+        if "model" in build_in_model and not isinstance(build_in_model["model"], str):
+            raise SettingsValidationError("build_in_model.model must be a string")
+        if "base_url" in build_in_model and not isinstance(build_in_model["base_url"], str):
+            raise SettingsValidationError("build_in_model.base_url must be a string")
+        if "api_key" in build_in_model and not isinstance(build_in_model["api_key"], str):
+            raise SettingsValidationError("build_in_model.api_key must be a string")
+        if "temperature" in build_in_model:
+            temperature = build_in_model["temperature"]
+            if not isinstance(temperature, (int, float)):
+                raise SettingsValidationError("build_in_model.temperature must be a number")
+        if "max_tokens" in build_in_model:
+            max_tokens = build_in_model["max_tokens"]
+            if not isinstance(max_tokens, int) or max_tokens <= 0:
+                raise SettingsValidationError("build_in_model.max_tokens must be a positive integer")
+        if "timeout_seconds" in build_in_model:
+            timeout_seconds = build_in_model["timeout_seconds"]
+            if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+                raise SettingsValidationError("build_in_model.timeout_seconds must be a positive number")
+
     @staticmethod
     def _validate_object(payload: dict[str, Any], key: str) -> None:
         if key in payload and not isinstance(payload[key], dict):
@@ -114,7 +145,8 @@ class SettingsService:
         self._backup_current_settings()
         serialized = json.dumps(settings, ensure_ascii=False, indent=2) + "\n"
         self.settings.settings_path.write_text(serialized, encoding="utf-8")
-        for key in ("workspace", "channels", "models", "monitoring", "agents", "teams"):
+        self._sync_build_in_model_env(settings.get("build_in_model") or {})
+        for key in ("workspace", "channels", "models", "build_in_model", "monitoring", "agents", "teams"):
             if key in settings:
                 self.db.execute(
                     """
@@ -145,7 +177,7 @@ class SettingsService:
 
     def _legacy_db_settings(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        allowed_keys = {"workspace", "channels", "models", "monitoring", "agents", "teams"}
+        allowed_keys = {"workspace", "channels", "models", "build_in_model", "monitoring", "agents", "teams"}
         rows = self.db.fetch_all("SELECT key, value FROM app_settings")
         for row in rows:
             if row["key"] not in allowed_keys:
@@ -239,8 +271,63 @@ class SettingsService:
 
     @staticmethod
     def _known_sections(settings: dict[str, Any]) -> dict[str, Any]:
-        allowed = {"workspace", "channels", "models", "monitoring", "agents", "teams"}
+        allowed = {"workspace", "channels", "models", "build_in_model", "monitoring", "agents", "teams"}
         return {key: value for key, value in settings.items() if key in allowed}
+
+    @staticmethod
+    def _build_in_model_env_settings() -> dict[str, Any]:
+        def read(name: str) -> str:
+            return os.environ.get(name, "").strip()
+
+        def read_number(name: str) -> int | float | None:
+            raw = read(name)
+            if not raw:
+                return None
+            try:
+                number = float(raw)
+            except ValueError:
+                return None
+            return int(number) if number.is_integer() else number
+
+        result: dict[str, Any] = {}
+        model = read("POCKETSTUDIO_BUILD_IN_MODEL_MODEL")
+        base_url = read("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL")
+        api_key = read("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY")
+        if model:
+            result["model"] = model
+        if base_url:
+            result["base_url"] = base_url
+        if api_key:
+            result["api_key"] = api_key
+        temperature = read_number("POCKETSTUDIO_BUILD_IN_MODEL_TEMPERATURE")
+        if temperature is not None:
+            result["temperature"] = temperature
+        max_tokens = read_number("POCKETSTUDIO_BUILD_IN_MODEL_MAX_TOKENS")
+        if max_tokens is not None:
+            result["max_tokens"] = int(max_tokens)
+        timeout_seconds = read_number("POCKETSTUDIO_BUILD_IN_MODEL_TIMEOUT_SECONDS")
+        if timeout_seconds is not None:
+            result["timeout_seconds"] = timeout_seconds
+        return result
+
+    @staticmethod
+    def _sync_build_in_model_env(build_in_model: dict[str, Any]) -> None:
+        mapping = {
+            "model": ("POCKETSTUDIO_BUILD_IN_MODEL_MODEL", "POCKETSTUDIO_WORKFLOW_SUMMARY_MODEL"),
+            "base_url": ("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL", "POCKETSTUDIO_WORKFLOW_SUMMARY_BASE_URL"),
+            "api_key": ("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY", "POCKETSTUDIO_WORKFLOW_SUMMARY_API_KEY"),
+            "temperature": ("POCKETSTUDIO_BUILD_IN_MODEL_TEMPERATURE", "POCKETSTUDIO_WORKFLOW_SUMMARY_TEMPERATURE"),
+            "max_tokens": ("POCKETSTUDIO_BUILD_IN_MODEL_MAX_TOKENS", "POCKETSTUDIO_WORKFLOW_SUMMARY_MAX_TOKENS"),
+            "timeout_seconds": ("POCKETSTUDIO_BUILD_IN_MODEL_TIMEOUT_SECONDS", "POCKETSTUDIO_WORKFLOW_SUMMARY_TIMEOUT_SECONDS"),
+        }
+        for key, env_names in mapping.items():
+            value = build_in_model.get(key)
+            text = "" if value is None else str(value).strip()
+            for env_name in env_names:
+                if text:
+                    os.environ[env_name] = text
+                else:
+                    os.environ.pop(env_name, None)
 
     @classmethod
     def _diff(cls, current: Any, next_value: Any, prefix: str = "") -> list[dict[str, Any]]:

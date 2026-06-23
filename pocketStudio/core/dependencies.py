@@ -47,7 +47,7 @@ def get_team_service() -> TeamService:
 
 @lru_cache
 def get_workflow_service() -> WorkflowService:
-    return WorkflowService(get_database(), get_team_service())
+    return WorkflowService(get_database(), get_team_service(), get_settings_service())
 
 
 @lru_cache

@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     stale_processing_seconds: int = 600
     heartbeat_enabled: bool = True
     heartbeat_interval_seconds: int = 3600
+    build_in_model_model: str = ""
+    build_in_model_base_url: str = ""
+    build_in_model_api_key: str = ""
+    build_in_model_temperature: float = 0.2
+    build_in_model_max_tokens: int = 256
+    build_in_model_timeout_seconds: float = 60.0
 
     model_config = SettingsConfigDict(env_prefix="POCKETSTUDIO_", env_file=".env", extra="ignore")
 

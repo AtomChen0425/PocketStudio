@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import operator
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Annotated, Any, Awaitable, Callable, TypedDict
+
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
+from langchain.chat_models import init_chat_model
 
 from pocketStudio.core.database import Database
 from pocketStudio.core.ids import prefixed_id
@@ -12,9 +18,10 @@ from pocketStudio.models import Agent, AgentRun, ChatMessageCreate, Orchestratio
 from pocketStudio.services.chat_service import ChatService
 from pocketStudio.services.event_service import EventService
 from pocketStudio.services.queue_service import QueueService
+from pocketStudio.services.settings_service import SettingsService
 from pocketStudio.services.team_service import TeamService
 
-_WORKFLOW_SUMMARY_COMPACT_EVERY = 5
+_WORKFLOW_SUMMARY_COMPACT_EVERY = 3
 _WORKFLOW_RUNNING_SUMMARY_LIMIT = 1000
 
 
@@ -42,9 +49,11 @@ class WorkflowState(TypedDict):
 
 
 class WorkflowService:
-    def __init__(self, db: Database, teams: TeamService) -> None:
+    def __init__(self, db: Database, teams: TeamService, settings_service: SettingsService | None = None) -> None:
         self.db = db
         self.teams = teams
+        self.settings_service = settings_service
+        self._workflow_summary_chain: Any | None = None
 
     def create(self, team_id: str, payload: TeamWorkflowCreate) -> TeamWorkflow:
         self._validate_definition_for_team(team_id, payload.definition)
@@ -366,14 +375,19 @@ class WorkflowService:
 
         return "\n\n".join(chunks)
 
-    @staticmethod
-    def summarize_workflow_output(text: str, max_length: int = 240) -> str:
-        '''
-        TODO: add LLM to handle summarize
-        '''
+    def summarize_workflow_output(self, text: str, max_length: int = 240) -> str:
         cleaned = " ".join(line.strip() for line in text.splitlines() if line.strip())
         if not cleaned:
             return "(empty)"
+        chain = self._get_workflow_summary_chain()
+        if chain is not None:
+            try:
+                summary = chain.invoke({"text": cleaned, "max_length": max_length})
+                normalized = self._normalize_summary_text(str(summary), max_length)
+                if normalized:
+                    return normalized
+            except Exception:
+                pass
         if len(cleaned) <= max_length:
             return cleaned
         return f"{cleaned[: max_length - 1].rstrip()}..."
@@ -419,6 +433,98 @@ class WorkflowService:
                 "nodes_since_compaction": 0,
             }
         return memory
+
+    def _get_workflow_summary_chain(self) -> Any | None:
+        if self._workflow_summary_chain is not None:
+            return self._workflow_summary_chain
+
+        model_name = self._build_in_model_setting(
+            "POCKETSTUDIO_BUILD_IN_MODEL_MODEL",
+            "POCKETSTUDIO_WORKFLOW_SUMMARY_MODEL",
+            "OPENAI_MODEL",
+        )
+        base_url = self._build_in_model_setting(
+            "POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL",
+            "POCKETSTUDIO_WORKFLOW_SUMMARY_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
+        api_key = self._build_in_model_setting(
+            "POCKETSTUDIO_BUILD_IN_MODEL_API_KEY",
+            "POCKETSTUDIO_WORKFLOW_SUMMARY_API_KEY",
+            "OPENAI_API_KEY",
+        )
+        if not model_name or not base_url:
+            return None
+
+        model_identifier = model_name
+        try:
+            model = init_chat_model(
+                model_identifier,
+                model_provider="google_genai",
+                temperature=self._build_in_model_number(
+                    "POCKETSTUDIO_BUILD_IN_MODEL_TEMPERATURE",
+                    "POCKETSTUDIO_WORKFLOW_SUMMARY_TEMPERATURE",
+                    0.2,
+                ),
+                max_tokens=int(
+                    self._build_in_model_number(
+                        "POCKETSTUDIO_BUILD_IN_MODEL_MAX_TOKENS",
+                        "POCKETSTUDIO_WORKFLOW_SUMMARY_MAX_TOKENS",
+                        256,
+                    )
+                ),
+                timeout=int(self._build_in_model_number(
+                    "POCKETSTUDIO_BUILD_IN_MODEL_TIMEOUT_SECONDS",
+                    "POCKETSTUDIO_WORKFLOW_SUMMARY_TIMEOUT_SECONDS",
+                    60.0,
+                )),
+                api_key=api_key
+            )
+        except ImportError:
+            return None
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You compress workflow state for future workflow nodes. "
+                    "Preserve durable facts, decisions, constraints, route outcomes, and unresolved work. "
+                    "Avoid filler and repetition.",
+                ),
+                (
+                    "human",
+                    "Target length: {max_length} characters.\n"
+                    "Summarize the workflow context below for each nodes.\n\n"
+                    "{text}",
+                ),
+            ]
+        )
+        self._workflow_summary_chain = prompt | model | StrOutputParser()
+        return self._workflow_summary_chain
+
+    @staticmethod
+    def _build_in_model_setting(env_name: str, legacy_env_name: str, default: str = "") -> str:
+        env_value = os.getenv(env_name, "").strip()
+        if env_value:
+            return env_value
+        legacy_value = os.getenv(legacy_env_name, "").strip()
+        if legacy_value:
+            return legacy_value
+        return default
+
+    @staticmethod
+    def _build_in_model_number(env_name: str, legacy_env_name: str, default: float) -> float:
+        value = os.getenv(env_name, "").strip() or os.getenv(legacy_env_name, "").strip()
+        if value:
+            try:
+                return float(value)
+            except ValueError:
+                return default
+        return default
+
+    @staticmethod
+    def _normalize_summary_text(text: str, max_length: int) -> str:
+        cleaned = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+        return cleaned
 
     @staticmethod
     def _langchain_runnable_for_agent(agent: Agent, run_agent: Callable[..., Awaitable[AgentRun]]):

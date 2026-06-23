@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePolling, useSSE, timeAgo } from "@/lib/hooks";
 import {
   getAgents,
@@ -55,6 +55,7 @@ import {
   WifiOff,
   Wifi,
   Pencil,
+  SlidersHorizontal,
 } from "lucide-react";
 
 const TABS = ["Overview", "Services", "Logs"] as const;
@@ -341,6 +342,7 @@ function ServicesTab() {
       <DaemonSection />
       <ChannelsSection />
       <BuiltinProviders />
+      <BuiltInModelSection />
       <CustomProviders />
       <PairingSection />
     </div>
@@ -714,6 +716,124 @@ function BuiltinProviders() {
   );
 }
 
+// 鈹€鈹€ Built-in Model 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+function BuiltInModelSection() {
+  const { data: settings, refresh } = usePolling(getSettings, 0);
+  const [editing, setEditing] = useState(false);
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [temperature, setTemperature] = useState("0.2");
+  const [maxTokens, setMaxTokens] = useState("256");
+  const [timeoutSeconds, setTimeoutSeconds] = useState("60");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const config = settings?.build_in_model;
+    setModel(config?.model ?? "");
+    setBaseUrl(config?.base_url ?? "");
+    setApiKey(config?.api_key ?? "");
+    setTemperature(String(config?.temperature ?? 0.2));
+    setMaxTokens(String(config?.max_tokens ?? 256));
+    setTimeoutSeconds(String(config?.timeout_seconds ?? 60));
+  }, [settings]);
+
+  const hasConfig = !!(settings?.build_in_model?.model || settings?.build_in_model?.base_url || settings?.build_in_model?.api_key);
+
+  const handleSave = async () => {
+    const nextTemperature = Number(temperature);
+    const nextMaxTokens = Number(maxTokens);
+    const nextTimeout = Number(timeoutSeconds);
+    if (!Number.isFinite(nextTemperature) || !Number.isFinite(nextMaxTokens) || !Number.isFinite(nextTimeout)) return;
+
+    setSaving(true);
+    await updateSettings({
+      build_in_model: {
+        ...settings?.build_in_model,
+        model: model.trim(),
+        base_url: baseUrl.trim(),
+        api_key: apiKey,
+        temperature: nextTemperature,
+        max_tokens: Math.max(1, Math.floor(nextMaxTokens)),
+        timeout_seconds: Math.max(1, nextTimeout),
+      },
+    });
+    setSaving(false);
+    setEditing(false);
+    refresh();
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+            <p className="text-sm font-semibold">Built-in Model</p>
+            {hasConfig ? (
+              <CredBadge color="green">Configured</CredBadge>
+            ) : (
+              <CredBadge color="zinc">Not configured</CredBadge>
+            )}
+          </div>
+          <button
+            onClick={() => setEditing(!editing)}
+            className="p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors rounded"
+            title="Edit built-in model"
+          >
+            {editing ? <X className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+        <div className="px-4 py-3 border-b bg-muted/20 text-xs text-muted-foreground">
+          These values are stored in <code className="font-mono">settings.json</code> and used by workflow summary.
+        </div>
+        <div className="grid gap-2.5 px-4 py-3 text-sm border-b">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-muted-foreground">Model</span>
+            <span className="font-medium truncate">{settings?.build_in_model?.model || "Not configured"}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-muted-foreground">Base URL</span>
+            <span className="font-medium truncate">{settings?.build_in_model?.base_url || "Not configured"}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-muted-foreground">Temperature</span>
+            <span className="font-medium">{settings?.build_in_model?.temperature ?? 0.2}</span>
+          </div>
+        </div>
+        {editing && (
+          <div className="px-4 py-4 space-y-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Model" value={model} onChange={setModel} placeholder="gpt-4o-mini" />
+              <Field label="Base URL" value={baseUrl} onChange={setBaseUrl} placeholder="https://api.openai.com/v1" />
+              <Field label="Temperature" value={temperature} onChange={setTemperature} placeholder="0.2" inputMode="decimal" />
+              <Field label="Max tokens" value={maxTokens} onChange={setMaxTokens} placeholder="256" inputMode="numeric" />
+              <Field label="Timeout (s)" value={timeoutSeconds} onChange={setTimeoutSeconds} placeholder="60" inputMode="decimal" />
+              <Field label="API Key" value={apiKey} onChange={setApiKey} placeholder="sk-..." type="password" />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-3 py-1.5 text-xs bg-foreground text-background hover:opacity-90 transition-opacity disabled:opacity-50 rounded"
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+              <button
+                onClick={() => setEditing(false)}
+                className="px-3 py-1.5 text-xs border rounded hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Custom Providers ──────────────────────────────────────────────────────
 
 function CustomProviders() {
@@ -1072,6 +1192,36 @@ function CredBadge({ color, children }: { color: "green" | "blue" | "zinc"; chil
     zinc: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
   };
   return <span className={`text-[10px] px-1.5 py-0.5 rounded ${styles[color]}`}>{children}</span>;
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  inputMode,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
+}) {
+  return (
+    <div>
+      <label className="text-xs text-muted-foreground">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        inputMode={inputMode}
+        className="w-full mt-0.5 px-2.5 py-1.5 text-sm border bg-background rounded"
+      />
+    </div>
+  );
 }
 
 function AgentSessionRow({ msg, onKill }: { msg: ProcessingMessage; onKill: () => Promise<void> }) {

@@ -3,11 +3,13 @@ import uuid
 from pathlib import Path
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from pocketStudio.core.config import Settings
 from pocketStudio.core.database import Database
 from pocketStudio.models import AgentCreate, TeamCreate, TeamWorkflowCreate, TeamWorkflowUpdate, WorkflowDefinition
 from pocketStudio.services.agent_service import AgentService
+from pocketStudio.services.settings_service import SettingsService
 from pocketStudio.services.team_service import TeamService
 from pocketStudio.services.workflow_service import WorkflowService
 
@@ -172,5 +174,80 @@ def test_workflow_service_imports_bare_definition_json() -> None:
         assert imported.id == "bare-flow"
         assert imported.name == "Bare Flow"
         assert imported.enabled is False
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_workflow_service_summarizes_output_with_langchain_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pocketStudio.services.workflow_service as workflow_service_module
+
+    captured: dict[str, object] = {}
+
+    def fake_init_chat_model(model=None, model_provider=None, **kwargs):
+        captured["model"] = model
+        captured["model_provider"] = model_provider
+        captured["kwargs"] = kwargs
+        return FakeListChatModel(responses=["durable summary"])
+
+    monkeypatch.setenv("POCKETSTUDIO_BUILD_IN_MODEL_MODEL", "gpt-test")
+    monkeypatch.setenv("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY", "secret")
+    monkeypatch.setattr(workflow_service_module, "init_chat_model", fake_init_chat_model, raising=True)
+
+    home = temp_home()
+    try:
+        _, teams, workflows = build_services(home)
+        summary = workflows.summarize_workflow_output("first line\nsecond line", max_length=80)
+
+        assert summary == "durable summary"
+        assert captured["model"] == "openai:gpt-test"
+        assert captured["kwargs"]["base_url"] == "https://example.invalid/v1"
+        assert captured["kwargs"]["api_key"] == "secret"
+        assert captured["kwargs"]["temperature"] == 0.2
+        assert captured["kwargs"]["max_tokens"] == 256
+        assert captured["kwargs"]["timeout"] == 60.0
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_workflow_service_uses_build_in_model_settings_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pocketStudio.services.workflow_service as workflow_service_module
+
+    captured: dict[str, object] = {}
+
+    def fake_init_chat_model(model=None, model_provider=None, **kwargs):
+        captured["model"] = model
+        captured["model_provider"] = model_provider
+        captured["kwargs"] = kwargs
+        return FakeListChatModel(responses=["snapshot summary"])
+
+    monkeypatch.delenv("POCKETSTUDIO_BUILD_IN_MODEL_MODEL", raising=False)
+    monkeypatch.delenv("POCKETSTUDIO_BUILD_IN_MODEL_BASE_URL", raising=False)
+    monkeypatch.delenv("POCKETSTUDIO_BUILD_IN_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr(workflow_service_module, "init_chat_model", fake_init_chat_model, raising=True)
+
+    home = temp_home()
+    try:
+        settings = Settings(pocketStudio_home=home)
+        db = Database(settings.database_path, journal_mode=settings.sqlite_journal_mode)
+        db.initialize()
+        teams = TeamService(db)
+        settings_service = SettingsService(db, settings)
+        settings_service.update(
+            {
+                "build_in_model": {
+                    "model": "gpt-snapshot",
+                    "base_url": "https://example.invalid/v1",
+                    "api_key": "secret",
+                }
+            }
+        )
+        workflows = WorkflowService(db, teams, settings_service)
+
+        summary = workflows.summarize_workflow_output("alpha\nbeta", max_length=80)
+
+        assert summary == "snapshot summary"
+        assert captured["model"] == "openai:gpt-snapshot"
+        assert captured["kwargs"]["base_url"] == "https://example.invalid/v1"
     finally:
         shutil.rmtree(home, ignore_errors=True)

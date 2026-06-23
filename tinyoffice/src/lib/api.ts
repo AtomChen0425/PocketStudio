@@ -152,6 +152,14 @@ export interface Settings {
     openai?: { model?: string; api_key?: string };
     opencode?: { model?: string };
   };
+  build_in_model?: {
+    model?: string;
+    base_url?: string;
+    api_key?: string;
+    temperature?: number;
+    max_tokens?: number;
+    timeout_seconds?: number;
+  };
   agents?: Record<string, AgentConfig>;
   teams?: Record<string, TeamConfig>;
   monitoring?: { heartbeat_interval?: number };

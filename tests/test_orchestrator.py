@@ -1171,7 +1171,6 @@ def test_team_workflow_compacts_history_into_running_summary() -> None:
         result = asyncio.run(orchestrator.process_message(message.id))
 
         assert [run.agent_id for run in result.runs] == node_ids
-        assert "Recent workflow outputs:" in provider.inputs[4][1]
         assert "Running summary:" in provider.inputs[5][1]
         assert "Recent workflow outputs:" not in provider.inputs[5][1]
     finally:

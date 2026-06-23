@@ -134,7 +134,32 @@ export default function SettingsPage() {
               title="Heartbeat"
               value={settings.monitoring?.heartbeat_interval ? `${settings.monitoring.heartbeat_interval}s` : "Disabled"}
             />
+            <OverviewCard
+              icon={<Cpu className="h-4 w-4 text-muted-foreground" />}
+              title="Built-in Model"
+              value={settings.build_in_model?.model || "Configured in Control Plane"}
+            />
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                Built-in Model
+                <Badge variant="outline" className="text-[10px]">CONTROL PLANE</Badge>
+              </CardTitle>
+              <CardDescription>
+                Workflow summary uses the build-in model settings managed in the Control Plane.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <DetailItem label="Model" value={settings.build_in_model?.model || "Not configured"} />
+              <DetailItem label="Base URL" value={settings.build_in_model?.base_url || "Not configured"} />
+              <DetailItem label="Temperature" value={formatNumber(settings.build_in_model?.temperature, "0.2")} />
+              <DetailItem label="Max tokens" value={formatNumber(settings.build_in_model?.max_tokens, "256")} />
+              <DetailItem label="Timeout" value={formatSeconds(settings.build_in_model?.timeout_seconds, "60s")} />
+              <DetailItem label="API Key" value={settings.build_in_model?.api_key ? "Configured" : "Not configured"} />
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>
@@ -144,6 +169,7 @@ export default function SettingsPage() {
               </CardTitle>
               <CardDescription>
                 Edit the raw configuration. Changes take effect on next message processing cycle.
+                Build-in model settings are shown above and persisted through the Control Plane.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -188,4 +214,21 @@ function OverviewCard({ icon, title, value }: { icon: React.ReactNode; title: st
       </CardContent>
     </Card>
   );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border bg-muted/20 px-3 py-2">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-medium break-all">{value}</p>
+    </div>
+  );
+}
+
+function formatNumber(value: number | undefined, fallback: string): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : fallback;
+}
+
+function formatSeconds(value: number | undefined, fallback: string): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value}s` : fallback;
 }
